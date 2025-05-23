@@ -12,3 +12,5 @@ right_zone:
 
 segment_entry:  [[2005, 1113], [2774, 1117]]   # upstream line
 segment_exit:   [[2058, 1200], [3053, 1205]]  # downstream line
+
+#updated zone config for bns
