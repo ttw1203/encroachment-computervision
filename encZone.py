@@ -226,6 +226,11 @@ def parse_arguments() -> argparse.Namespace:
         default="strongsort",
         help="Tracking backend to use (default: strongsort)",
     )
+    parser.add_argument(
+        "--segment_speed",
+        action="store_true",
+        help="Enable 2-segment speed calibration (hides instantaneous speed)"
+    )
 
     return parser.parse_args()
 # Kalman Filter related
@@ -276,6 +281,12 @@ if __name__ == "__main__":
     args = parse_arguments()
 
     video_info = sv.VideoInfo.from_video_path(video_path=args.source_video_path)
+
+    # optional segment-speed calibrator
+    if args.segment_speed:
+        from segment_speed import SegmentSpeedCalibrator
+
+        seg_cal = SegmentSpeedCalibrator(args.zones_file, video_info.fps)
     model = YOLO(MODEL_WEIGHTS or "yolov8l.pt")
     model.to(DEVICE)
 
@@ -496,6 +507,13 @@ if __name__ == "__main__":
             points = view_transformer.transform_points(points=points).astype(np.float32)
             # print("DETECTED IDS:", detections.tracker_id.tolist())
             for tracker_id, [x, y] in zip(detections.tracker_id, points):
+                for det_idx in range(len(detections)):
+                    tid = int(detections.tracker_id[det_idx])
+                    bbox = detections.xyxy[det_idx].astype(float)
+
+                    # centre of this detection (pixels)
+                    p_cur = ((bbox[0] + bbox[2]) * 0.5,
+                             (bbox[1] + bbox[3]) * 0.5)
                 dt = 1 / video_info.fps
                 if tracker_id not in kf_states:
                     kf = create_kalman_filter(dt)
@@ -510,6 +528,9 @@ if __name__ == "__main__":
                 kf.predict()
                 kf.correct(np.array([[x], [y]], np.float32))
                 Xf, Yf, Vx, Vy = kf.statePost.flatten()
+                # ── (NEW) feed segment-speed calibrator ──
+                if args.segment_speed:
+                    seg_cal.update(tid, p_cur, (Xf, Yf), frame_idx)
 
                 # 2) UPDATE “last seen” for all detections
                 # safely extract a list of IDs (or empty list if none)
@@ -606,6 +627,8 @@ if __name__ == "__main__":
                 future_coordinates.pop(tid, None)
                 last_seen_frame.pop(tid, None)
             labels = []
+            if args.segment_speed:
+                seg_cal.draw(frame)
             for tracker_id in detections.tracker_id:
                 if len(coordinates[tracker_id]) < video_info.fps / 2:
                     labels.append(f"#{tracker_id}")
@@ -635,10 +658,8 @@ if __name__ == "__main__":
                         round(speed * 3.6, 2)  # speed km/h
                     ])
 
-
-
-
-                    label = f"#{tracker_id} {int(speed * 3.6)} km/h"
+                    label = f"#{tracker_id}" if args.segment_speed \
+                        else f"#{tracker_id} {int(speed * 3.6)} km/h"
                     if tracker_id in ttc_labels:
                         label += " | " + ttc_labels[tracker_id][0]
                     labels.append(label)
@@ -750,6 +771,8 @@ if __name__ == "__main__":
         print(f"[encroachment] {len(enc_events)} events saved → encroachments.csv")
 
         bar.close()
+        if args.segment_speed:
+            seg_cal.dump_csv()
         print(f"Total TTC events logged: {ttc_event_count}")
 
         elapsed = tm.time() - t0
