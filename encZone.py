@@ -226,6 +226,11 @@ def parse_arguments() -> argparse.Namespace:
         default="strongsort",
         help="Tracking backend to use (default: strongsort)",
     )
+    parser.add_argument(
+        "--segment_speed",
+        action="store_true",
+        help="Enable segment-based speed calibration (default: off)"
+    )
 
     return parser.parse_args()
 # Kalman Filter related
@@ -272,9 +277,29 @@ def predict_future_positions_kf(kf, delta_t=0.5, num_predictions=4):
         future_positions.append((x_future, y_future))
     return future_positions
 
+def line_side(pt, a, b):
+    # +1 if pt is on left of AB, −1 on right, 0 on the line
+    return np.sign((b[0]-a[0])*(pt[1]-a[1]) - (b[1]-a[1])*(pt[0]-a[0]))
+
+def load_segments(path:str):
+    with open(path, "r") as f:
+        data = yaml.safe_load(f)
+    entry = np.asarray(data["segment_entry"], np.int32)
+    exit_  = np.asarray(data["segment_exit"],  np.int32)
+    return entry, exit_
+
+
+
 if __name__ == "__main__":
     args = parse_arguments()
+    # ── load zone polygons (always) ─────────────────────────────
+    LEFT_CNT, RIGHT_CNT = load_zones(args.zones_file)
 
+    # ── load segment lines only if needed ──────────────────────
+    if args.segment_speed:
+        ENTRY_LINE, EXIT_LINE = load_segments(args.zones_file)
+        segment_state = {}
+        segment_results = []
     video_info = sv.VideoInfo.from_video_path(video_path=args.source_video_path)
     model = YOLO(MODEL_WEIGHTS or "yolov8l.pt")
     model.to(DEVICE)
@@ -495,7 +520,7 @@ if __name__ == "__main__":
             )
             points = view_transformer.transform_points(points=points).astype(np.float32)
             # print("DETECTED IDS:", detections.tracker_id.tolist())
-            for tracker_id, [x, y] in zip(detections.tracker_id, points):
+            for det_idx, (tracker_id, [x, y]) in enumerate(zip(detections.tracker_id, points)):
                 dt = 1 / video_info.fps
                 if tracker_id not in kf_states:
                     kf = create_kalman_filter(dt)
@@ -510,6 +535,49 @@ if __name__ == "__main__":
                 kf.predict()
                 kf.correct(np.array([[x], [y]], np.float32))
                 Xf, Yf, Vx, Vy = kf.statePost.flatten()
+                if args.segment_speed:
+                    # ⇢ cur_p  : current pixel centre   (x_px, y_px)
+                    # ⇢ Xf, Yf : current BEV metres     (already available)
+                    # tracker_id: current ID
+
+                    bbox = detections.xyxy[det_idx].astype(float)
+                    p_cur = ((bbox[0] + bbox[2]) * 0.5,
+                             (bbox[1] + bbox[3]) * 0.5)
+
+                    # --------- entry / exit with sign-flip test ----------
+                    prev_side = segment_state.setdefault(
+                        tracker_id,
+                        dict(p_prev=p_cur, side_prev=line_side(p_cur, *ENTRY_LINE))
+                    )['side_prev']
+                    curr_side = line_side(p_cur, *ENTRY_LINE)
+
+                    # 1) crossed ENTRY?
+                    st = segment_state[tracker_id]
+                    if 't0' not in st and prev_side * curr_side < 0:
+                        st.update(t0=frame_idx, x0m=Xf, y0m=Yf)
+
+                    # 2) crossed EXIT?
+                    prev_exit = line_side(st['p_prev'], *EXIT_LINE)
+                    curr_exit = line_side(p_cur, *EXIT_LINE)
+                    if 't0' in st and 't_exit' not in st and prev_exit * curr_exit < 0:
+                        t1 = frame_idx
+                        dt = (t1 - st['t0']) / video_info.fps
+                        if dt:  # guard /0
+                            dx = Xf - st['x0m']
+                            dy = Yf - st['y0m']
+                            v_ms = math.hypot(dx, dy) / dt
+                            segment_results.append([
+                                tracker_id, st['t0'], t1,
+                                round(math.hypot(dx, dy), 2),
+                                round(dt, 3),
+                                round(v_ms, 2),
+                                round(v_ms * 3.6, 2)
+                            ])
+                        st['t_exit'] = t1
+
+                    # update memory for next frame
+                    st['p_prev'] = p_cur
+                    st['side_prev'] = curr_side
 
                 # 2) UPDATE “last seen” for all detections
                 # safely extract a list of IDs (or empty list if none)
@@ -642,6 +710,31 @@ if __name__ == "__main__":
                     if tracker_id in ttc_labels:
                         label += " | " + ttc_labels[tracker_id][0]
                     labels.append(label)
+            if args.segment_speed:
+                # ─── Segment overlays ─────────────────────────────────────────────
+                ENTRY_COLOR = (0, 255, 255)  # BGR  yellow
+                EXIT_COLOR = (0, 0, 255)  # BGR  red
+                THICKNESS = 3  # pixels
+
+                # draw the plain lines
+                cv2.line(frame, tuple(ENTRY_LINE[0]), tuple(ENTRY_LINE[1]),
+                         ENTRY_COLOR, THICKNESS)
+                cv2.arrowedLine(frame, tuple(EXIT_LINE[0]), tuple(EXIT_LINE[1]),
+                                EXIT_COLOR, THICKNESS, tipLength=0.05)  # arrow shows flow
+
+
+                # optional text labels centred on each line
+                def _midpt(a, b):
+                    return (int((a[0] + b[0]) * 0.5), int((a[1] + b[1]) * 0.5))
+
+
+                cv2.putText(frame, "ENTRY", _midpt(*ENTRY_LINE),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, ENTRY_COLOR, 2, cv2.LINE_AA)
+
+                cv2.putText(frame, "EXIT", _midpt(*EXIT_LINE),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, EXIT_COLOR, 2, cv2.LINE_AA)
+                # ──────────────────────────────────────────────────────────────────
+
             annotated_frame = frame.copy()
             annotated_frame = trace_annotator.annotate(
                 scene=annotated_frame, detections=detections
@@ -748,6 +841,13 @@ if __name__ == "__main__":
         enc_csv_file = out_dir / f"enc_events_{timestamp}.csv"
         pd.DataFrame(enc_events).to_csv(enc_csv_file, index=False)
         print(f"[encroachment] {len(enc_events)} events saved → encroachments.csv")
+
+        if args.segment_speed and segment_results:
+            pd.DataFrame(
+                segment_results,
+                columns=["vehicle_id", "frame_entry", "frame_exit", "distance_m",
+                         "time_s", "speed_m_s", "speed_km_h"]
+            ).to_csv(out_dir / f"segment_speeds_{timestamp}.csv", index=False)
 
         bar.close()
         print(f"Total TTC events logged: {ttc_event_count}")
