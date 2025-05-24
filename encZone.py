@@ -18,6 +18,7 @@ from copy import deepcopy
 import random
 from datetime import datetime
 from pathlib import Path
+from boxmot import StrongSort
 
 import os, json, yaml
 from dotenv import load_dotenv
@@ -218,12 +219,25 @@ def parse_arguments() -> argparse.Namespace:
                         help="YAML/JSON file with curb-lane polygons")
     parser.add_argument("--dump_zones_png",
                         help="Write a PNG showing lane polygons over the first video frame, then exit")
+    # Tracker backend ----------------------------------------------------
+    parser.add_argument(
+        "--tracker",
+        choices=["strongsort", "bytetrack"],
+        default="strongsort",
+        help="Tracking backend to use (default: strongsort)",
+    )
 
     return parser.parse_args()
 # Kalman Filter related
 kf_states = dict()
 
-
+def sv_to_boxmot(det: sv.Detections) -> np.ndarray:
+    """Return Nx6 array  [x1 y1 x2 y2 conf cls] for StrongSORT."""
+    if not len(det):
+        return np.empty((0, 6), dtype=np.float32)
+    return np.hstack((det.xyxy,
+                      det.confidence[:, None],
+                      det.class_id[:, None])).astype(np.float32)
 def create_kalman_filter(dt: float) -> cv2.KalmanFilter:
     kf = cv2.KalmanFilter(4, 2)
     # state = [x, y, vx, vy], measurement = [x, y]
@@ -328,9 +342,18 @@ if __name__ == "__main__":
     ENCROACH_SECS = 1  # seconds inside zone
     MOVE_THRESH_METRES = 1.0  # “barely moved” in world metres
 
-    byte_track = sv.ByteTrack(
-        frame_rate=video_info.fps, track_activation_threshold=args.confidence_threshold
-    )
+    if args.tracker == "strongsort":
+        strong_sort = StrongSort(
+            reid_weights=Path("mobilenetv2_x1_4_dukemtmcreid.pt"),
+            device=0 if DEVICE != "cpu" else DEVICE,
+            half=False,
+            max_age=300,
+        )
+    else:  # ByteTrack
+        byte_track = sv.ByteTrack(
+            frame_rate=video_info.fps,
+            track_activation_threshold=args.confidence_threshold,
+        )
 
     thickness = 2
     text_scale = 1
@@ -377,7 +400,28 @@ if __name__ == "__main__":
             detections = detections.with_nms(threshold=args.iou_threshold)
             # ✂ Ignore riders so that only true pedestrians remain
             detections = filter_rider_persons(detections, iou_thr=0.50)
-            detections = byte_track.update_with_detections(detections=detections)
+            if args.tracker == "strongsort":
+                tracks = strong_sort.update(
+                    sv_to_boxmot(detections),
+                    frame,  # BGR uint8
+                )
+                if tracks.size:
+                    detections = sv.Detections(
+                        xyxy=tracks[:, :4],
+                        confidence=tracks[:, 5],
+                        class_id=tracks[:, 6].astype(int),
+                        tracker_id=tracks[:, 4].astype(int),
+                    )
+                else:  # StrongSORT has no active tracks
+                    detections = sv.Detections(
+                        xyxy=np.empty((0, 4), dtype=float),
+                        confidence=np.empty(0, dtype=float),
+                        class_id=np.empty(0, dtype=int),
+                        tracker_id=np.empty(0, dtype=int),
+                    )
+            else:  # ByteTrack
+                detections = byte_track.update_with_detections(detections=detections)
+
             # ─── FIND WHICH DETECTIONS ARE INSIDE EITHER CURB-SIDE ZONE ───
             in_left = left_zone.trigger(detections)
             in_right = right_zone.trigger(detections)
