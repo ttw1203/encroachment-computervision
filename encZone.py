@@ -168,6 +168,11 @@ def parse_arguments() -> argparse.Namespace:
         description="Vehicle Speed Estimation using Ultralytics and Supervision"
     )
     parser.add_argument(
+        "--no_blend_zones",
+        action="store_true",
+        help="Disable the translucent curb-lane overlays drawn by blend_zone()"
+    )
+    parser.add_argument(
         "--source_video_path",
         required=False,
         help="Path to the source video file",
@@ -285,12 +290,19 @@ if __name__ == "__main__":
     LEFT_CNT = LEFT_ZONE_POLY.reshape((-1, 1, 2))
     RIGHT_CNT = RIGHT_ZONE_POLY.reshape((-1, 1, 2))
 
-    H, W = video_info.resolution_wh[::-1]
-    mask_left = np.zeros((H, W), np.uint8)
-    mask_right = np.zeros((H, W), np.uint8)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 2. Mask creation (after LEFT_CNT / RIGHT_CNT are defined)
+    # ─────────────────────────────────────────────────────────────────────────────
+    need_masks = (not args.no_blend_zones) or args.dump_zones_png
 
-    cv2.fillPoly(mask_left, [LEFT_CNT], 255)
-    cv2.fillPoly(mask_right, [RIGHT_CNT], 255)
+    if need_masks:
+        H, W = video_info.resolution_wh[::-1]
+        mask_left = np.zeros((H, W), np.uint8)
+        mask_right = np.zeros((H, W), np.uint8)
+        cv2.fillPoly(mask_left, [LEFT_CNT], 255)
+        cv2.fillPoly(mask_right, [RIGHT_CNT], 255)
+    else:
+        mask_left = mask_right = None  # names stay defined
 
     if args.dump_zones_png:
         cap = cv2.VideoCapture(args.source_video_path)
@@ -372,13 +384,14 @@ if __name__ == "__main__":
             in_zone = in_left | in_right  # boolean mask, same length as detections
 
             # Decide live colour: green until encroached ≥ 30 s, then red
-            left_enc = any(side == 'left' for side in enc_id_to_zone_side.values())
-            right_enc = any(side == 'right' for side in enc_id_to_zone_side.values())
+            left_enc = any(side == "left" for side in enc_id_to_zone_side.values())
+            right_enc = any(side == "right" for side in enc_id_to_zone_side.values())
 
-            blend_zone(frame, mask_left,
-                       (0, 255, 0) if not left_enc else (0, 0, 255))  # green ↔ red
-            blend_zone(frame, mask_right,
-                       (0, 255, 0) if not right_enc else (0, 0, 255))
+            if not args.no_blend_zones:
+                blend_zone(frame, mask_left,
+                           (0, 255, 0) if not left_enc else (0, 0, 255))
+                blend_zone(frame, mask_right,
+                           (0, 255, 0) if not right_enc else (0, 0, 255))
 
             # ─── PROCESS MEMBERSHIP FOR EACH VEHICLE ───
             for det_idx, inside in enumerate(in_zone):
