@@ -474,7 +474,7 @@ def calculate_simple_ttc(kf1, kf2, vehicle1_dims: Tuple[float, float],
 future_colors: dict[int, tuple[int, int, int]] = {}
 
 # Show live preview while processing?
-DISPLAY = False  # set True if you ever want to see the window again
+DISPLAY = False # set True if you ever want to see the window again
 
 logging.getLogger('ultralytics').setLevel(logging.CRITICAL)  # ERROR or CRITICAL
 
