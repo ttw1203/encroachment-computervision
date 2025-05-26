@@ -32,261 +32,138 @@ MODEL_WEIGHTS = os.getenv("MODEL_WEIGHTS")
 ENC_ZONE_CONFIG = os.getenv("ENC_ZONE_CONFIG")
 DEVICE = os.getenv("DEVICE", "cpu")
 
-# ============ NEW STRUCTURES FOR ENHANCED TTC ============
+# ============ OPTIMIZED STRUCTURES FOR ENHANCED TTC ============
 # Store vehicle dimensions for each tracker ID
 vehicle_dims: Dict[int, Tuple[float, float]] = {}  # tracker_id -> (width_m, height_m)
 vehicle_dims_history: Dict[int, deque] = defaultdict(lambda: deque(maxlen=5))  # for smoothing
 
-
-# Trajectory envelope data structure
-class TrajectoryEnvelope:
-    def __init__(self, tracker_id: int, boxes: List['OrientedBox'], timestamps: List[float]):
-        self.tracker_id = tracker_id
-        self.boxes = boxes  # List of OrientedBox objects
-        self.timestamps = timestamps  # Time when vehicle will be at each box
+# Cache for trajectory predictions to avoid recalculation
+trajectory_cache: Dict[int, Tuple[List[Tuple[float, float]], float]] = {}  # tracker_id -> (positions, last_update_time)
 
 
-class OrientedBox:
-    """Represents an oriented bounding box in 2D space"""
+# ============ SIMPLIFIED AND OPTIMIZED UTILITY FUNCTIONS ============
 
-    def __init__(self, center_x: float, center_y: float, width: float, height: float, angle: float):
-        self.center_x = center_x
-        self.center_y = center_y
-        self.width = width
-        self.height = height
-        self.angle = angle  # radians
-
-    def get_corners(self) -> np.ndarray:
-        """Get the four corners of the oriented box"""
-        cos_a = np.cos(self.angle)
-        sin_a = np.sin(self.angle)
-
-        # Half dimensions
-        hw = self.width / 2
-        hh = self.height / 2
-
-        # Corners in local coordinates
-        corners_local = np.array([
-            [-hw, -hh],
-            [hw, -hh],
-            [hw, hh],
-            [-hw, hh]
-        ])
-
-        # Rotation matrix
-        rotation = np.array([
-            [cos_a, -sin_a],
-            [sin_a, cos_a]
-        ])
-
-        # Transform to world coordinates
-        corners_world = corners_local @ rotation.T
-        corners_world[:, 0] += self.center_x
-        corners_world[:, 1] += self.center_y
-
-        return corners_world
+def quick_box_distance_check(x1: float, y1: float, x2: float, y2: float,
+                             threshold: float = 10.0) -> bool:
+    """Quick distance check to avoid expensive calculations"""
+    return math.hypot(x2 - x1, y2 - y1) < threshold
 
 
-# ============ UTILITY FUNCTIONS FOR ENHANCED TTC ============
+def simplified_box_overlap(box1_center: Tuple[float, float], box1_dims: Tuple[float, float],
+                           box2_center: Tuple[float, float], box2_dims: Tuple[float, float],
+                           safety_margin: float = 0.5) -> bool:
+    """
+    Simplified axis-aligned bounding box overlap check.
+    Assumes boxes are roughly aligned with direction of travel.
+    """
+    # Add safety margin to dimensions
+    w1, h1 = box1_dims[0] + safety_margin, box1_dims[1] + safety_margin
+    w2, h2 = box2_dims[0] + safety_margin, box2_dims[1] + safety_margin
 
-def boxes_intersect(box1: OrientedBox, box2: OrientedBox) -> bool:
-    """Check if two oriented boxes intersect using Separating Axis Theorem"""
-    corners1 = box1.get_corners()
-    corners2 = box2.get_corners()
+    # Check if boxes overlap
+    dx = abs(box1_center[0] - box2_center[0])
+    dy = abs(box1_center[1] - box2_center[1])
 
-    # Get all potential separating axes (edges of both boxes)
-    axes = []
-
-    # Add axes from box1
-    for i in range(4):
-        edge = corners1[(i + 1) % 4] - corners1[i]
-        axis = np.array([-edge[1], edge[0]])  # Perpendicular to edge
-        if np.linalg.norm(axis) > 0:
-            axes.append(axis / np.linalg.norm(axis))
-
-    # Add axes from box2
-    for i in range(4):
-        edge = corners2[(i + 1) % 4] - corners2[i]
-        axis = np.array([-edge[1], edge[0]])
-        if np.linalg.norm(axis) > 0:
-            axes.append(axis / np.linalg.norm(axis))
-
-    # Check projection on each axis
-    for axis in axes:
-        # Project all corners onto axis
-        proj1 = corners1 @ axis
-        proj2 = corners2 @ axis
-
-        # Check if projections overlap
-        if proj1.max() < proj2.min() or proj2.max() < proj1.min():
-            return False  # Found separating axis
-
-    return True  # No separating axis found, boxes intersect
+    return dx < (w1 + w2) / 2 and dy < (h1 + h2) / 2
 
 
-def find_trajectory_intersection(traj1: TrajectoryEnvelope, traj2: TrajectoryEnvelope,
-                                 time_tolerance: float = 0.2) -> Optional[Dict]:
-    """Find intersection between two trajectory envelopes with temporal overlap"""
-    intersections = []
-
-    for i, (box1, t1) in enumerate(zip(traj1.boxes, traj1.timestamps)):
-        for j, (box2, t2) in enumerate(zip(traj2.boxes, traj2.timestamps)):
-            # Check temporal overlap
-            if abs(t1 - t2) <= time_tolerance:
-                # Check spatial overlap
-                if boxes_intersect(box1, box2):
-                    # Calculate envelope edge distance for lane classification
-                    edge_dist = calculate_envelope_edge_distance(box1, box2)
-
-                    intersections.append({
-                        'box1_idx': i,
-                        'box2_idx': j,
-                        'time1': t1,
-                        'time2': t2,
-                        'time_diff': abs(t1 - t2),
-                        'center_x': (box1.center_x + box2.center_x) / 2,
-                        'center_y': (box1.center_y + box2.center_y) / 2,
-                        'edge_distance': edge_dist,
-                        'conflict_type': 'same_lane' if edge_dist < 1.5 else 'cross_lane'
-                    })
-
-    # Return earliest conflict if any found
-    if intersections:
-        return min(intersections, key=lambda x: min(x['time1'], x['time2']))
-    return None
-
-
-def calculate_envelope_edge_distance(box1: OrientedBox, box2: OrientedBox) -> float:
-    """Calculate minimum distance between box edges (not centers)"""
-    corners1 = box1.get_corners()
-    corners2 = box2.get_corners()
-
-    min_dist = float('inf')
-
-    # Check distance from each edge of box1 to each edge of box2
-    for i in range(4):
-        for j in range(4):
-            # Edge from box1
-            p1 = corners1[i]
-            p2 = corners1[(i + 1) % 4]
-
-            # Edge from box2
-            p3 = corners2[j]
-            p4 = corners2[(j + 1) % 4]
-
-            # Calculate minimum distance between line segments
-            dist = segment_to_segment_distance(p1, p2, p3, p4)
-            min_dist = min(min_dist, dist)
-
-    return min_dist
-
-
-def segment_to_segment_distance(p1, p2, p3, p4):
-    """Calculate minimum distance between two line segments"""
-    # Simplified implementation - can be optimized
-    # Check endpoints to opposite segments
-    distances = [
-        point_to_segment_distance(p1, p3, p4),
-        point_to_segment_distance(p2, p3, p4),
-        point_to_segment_distance(p3, p1, p2),
-        point_to_segment_distance(p4, p1, p2)
-    ]
-    return min(distances)
-
-
-def point_to_segment_distance(point, seg_start, seg_end):
-    """Calculate distance from point to line segment"""
-    seg_vec = seg_end - seg_start
-    point_vec = point - seg_start
-    seg_len = np.linalg.norm(seg_vec)
-
-    if seg_len == 0:
-        return np.linalg.norm(point_vec)
-
-    t = max(0, min(1, np.dot(point_vec, seg_vec) / (seg_len ** 2)))
-    projection = seg_start + t * seg_vec
-
-    return np.linalg.norm(point - projection)
-
-
-def predict_trajectory_envelope(kf, vehicle_width: float, vehicle_height: float,
-                                delta_t: float = 0.1, num_predictions: int = 30,
-                                max_distance: float = 50.0) -> TrajectoryEnvelope:
-    """Predict future trajectory as a series of oriented bounding boxes"""
-    boxes = []
-    timestamps = []
-
-    # Get current state
+def predict_future_positions_optimized(kf, delta_t: float = 0.5,
+                                       num_predictions: int = 6,
+                                       max_distance: float = 30.0) -> List[Tuple[float, float, float]]:
+    """
+    Optimized trajectory prediction - fewer points, simpler calculation.
+    Returns list of (x, y, time) tuples.
+    """
+    positions = []
     x, y, vx, vy = kf.statePost.flatten()
 
-    # Calculate velocity angle for box orientation
-    if abs(vx) > 0.01 or abs(vy) > 0.01:
-        angle = np.arctan2(vy, vx)
-    else:
-        angle = 0
+    # Skip if vehicle is nearly stationary
+    speed = math.hypot(vx, vy)
+    if speed < 0.5:  # Less than 0.5 m/s
+        return []
 
-    # Generate future positions
-    for step in range(num_predictions):
+    for step in range(1, num_predictions + 1):
         t = step * delta_t
         x_future = x + vx * t
         y_future = y + vy * t
 
-        # Check if within reasonable distance
+        # Check distance limit
         dist = math.hypot(x_future - x, y_future - y)
         if dist > max_distance:
             break
 
-        # Create oriented box at future position
-        box = OrientedBox(x_future, y_future, vehicle_width, vehicle_height, angle)
-        boxes.append(box)
-        timestamps.append(t)
+        positions.append((x_future, y_future, t))
 
-    return TrajectoryEnvelope(tracker_id=-1, boxes=boxes, timestamps=timestamps)
+    return positions
 
 
-def calculate_enhanced_ttc(traj1: TrajectoryEnvelope, traj2: TrajectoryEnvelope,
-                           intersection: Dict, kf1, kf2) -> Optional[Dict]:
-    """Calculate TTC based on trajectory intersection and conflict type"""
-    if intersection['conflict_type'] == 'same_lane':
-        # Same-lane scenario: use longitudinal separation
-        x1, y1, vx1, vy1 = kf1.statePost.flatten()
-        x2, y2, vx2, vy2 = kf2.statePost.flatten()
+def calculate_simple_ttc(kf1, kf2, vehicle1_dims: Tuple[float, float],
+                         vehicle2_dims: Tuple[float, float]) -> Optional[Dict]:
+    """
+    Simplified TTC calculation using current states and velocities.
+    Much faster than full trajectory envelope intersection.
+    """
+    # Get states
+    x1, y1, vx1, vy1 = kf1.statePost.flatten()
+    x2, y2, vx2, vy2 = kf2.statePost.flatten()
 
-        # Relative position and velocity
-        dx = x2 - x1
-        dy = y2 - y1
-        dvx = vx2 - vx1
-        dvy = vy2 - vy1
+    # Quick distance check
+    current_dist = math.hypot(x2 - x1, y2 - y1)
+    if current_dist > 20.0:  # Ignore vehicles more than 20m apart
+        return None
 
-        # Longitudinal distance and relative speed
-        dist = math.hypot(dx, dy)
-        rel_speed = math.hypot(dvx, dvy)
+    # Relative motion
+    dvx = vx2 - vx1
+    dvy = vy2 - vy1
+    rel_speed = math.hypot(dvx, dvy)
 
-        if rel_speed > 0.1:  # Approaching
-            ttc = dist / rel_speed
-            return {
-                'ttc': ttc,
-                'type': 'rear_end',
-                'distance': dist,
-                'rel_speed': rel_speed
-            }
-    else:
-        # Cross-lane scenario: use time difference at conflict zone
-        time_diff = abs(intersection['time1'] - intersection['time2'])
-        earlier_time = min(intersection['time1'], intersection['time2'])
+    # Skip if relative speed is too low
+    if rel_speed < 0.5:
+        return None
+
+    # Simple TTC calculation based on closest approach
+    dx = x2 - x1
+    dy = y2 - y1
+
+    # Project when they'll be closest
+    dot_product = dx * dvx + dy * dvy
+    if dot_product >= 0:  # Moving away from each other
+        return None
+
+    # Time to closest approach
+    ttc = -dot_product / (rel_speed ** 2)
+
+    if ttc <= 0 or ttc > 3.0:  # Only consider next 3 seconds
+        return None
+
+    # Position at closest approach
+    x1_future = x1 + vx1 * ttc
+    y1_future = y1 + vy1 * ttc
+    x2_future = x2 + vx2 * ttc
+    y2_future = y2 + vy2 * ttc
+
+    # Check if boxes would overlap at closest approach
+    if simplified_box_overlap((x1_future, y1_future), vehicle1_dims,
+                              (x2_future, y2_future), vehicle2_dims):
+        # Determine collision type based on relative angle
+        angle = abs(math.atan2(vy2 - vy1, vx2 - vx1) - math.atan2(vy1, vx1))
+        angle = min(angle, 2 * math.pi - angle)  # Normalize to [0, π]
+
+        collision_type = "rear_end" if angle < math.pi / 4 else "intersection"
 
         return {
-            'ttc': earlier_time,
-            'type': 'intersection',
-            'arrival_diff': time_diff,
-            'conflict_x': intersection['center_x'],
-            'conflict_y': intersection['center_y']
+            'ttc': ttc,
+            'type': collision_type,
+            'distance': current_dist,
+            'rel_speed': rel_speed,
+            'intersection_x': (x1_future + x2_future) / 2,
+            'intersection_y': (y1_future + y2_future) / 2
         }
 
     return None
 
 
-# ============ EXISTING FUNCTIONS (unchanged) ============
+# ============ EXISTING FUNCTIONS (keep most unchanged) ============
 # map tracker_id → BGR colour tuple
 future_colors: dict[int, tuple[int, int, int]] = {}
 
@@ -316,10 +193,7 @@ TARGET = np.array(
 )
 
 
-# [Include all the existing helper functions: load_zones, blend_zone, _iou_xyxy,
-#  filter_rider_persons, ViewTransformer, parse_arguments, sv_to_boxmot,
-#  create_kalman_filter - these remain unchanged]
-
+# [Include all the existing helper functions unchanged]
 def load_zones(path: str) -> tuple[np.ndarray, np.ndarray]:
     ext = os.path.splitext(path)[1].lower()
     with open(path, "r") as f:
@@ -457,22 +331,22 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--iou_threshold", default=0.7, help="IOU threshold for the model", type=float
     )
-    # 🚀 NEW ARGUMENTS
+    # 🚀 OPTIMIZED ARGUMENTS
     parser.add_argument(
         "--num_future_predictions",
-        default=30,  # Increased for better trajectory coverage
+        default=6,  # Reduced from 30 to 6 for performance
         help="Number of future points to predict per vehicle",
         type=int
     )
     parser.add_argument(
         "--future_prediction_interval",
-        default=0.1,
+        default=0.5,  # Increased from 0.1 to 0.5 for fewer calculations
         help="Time interval (seconds) between future predictions",
         type=float
     )
     parser.add_argument(
         "--ttc_threshold",
-        default=3.0,  # Increased to catch more potential conflicts
+        default=3.0,
         help="Only show TTC if it's ≤ this value (in seconds)",
         type=float
     )
@@ -542,7 +416,10 @@ if __name__ == "__main__":
     ttc_event_count = 0  # live counter
 
     last_seen_frame = {}  # tracker_id → last frame index where it was detected
-    MAX_AGE_SECONDS = 1  # how long to keep a "dead" track around
+
+    # Note: We maintain "ghost" tracks briefly to handle temporary occlusions,
+    # but TTC calculations are restricted to currently visible vehicles only
+    MAX_AGE_SECONDS = 0.5  # Reduced from 1.0 to minimize ghost tracks
     MAX_AGE_FRAMES = int(video_info.fps * MAX_AGE_SECONDS)
 
     # ─── ENCROACHMENT ZONES (pixel coordinates, clockwise) ───
@@ -635,8 +512,14 @@ if __name__ == "__main__":
     enc_active_ids = set()  # IDs still in-zone and already flagged
     enc_id_to_zone_side = {}  # tracker_id → "left" | "right"
 
+    # ============ PERFORMANCE TRACKING ============
+    ttc_calc_times = []
+    frame_times = []
+
     with sv.VideoSink(args.target_video_path, video_info) as sink:
         for frame in frame_generator:
+            frame_start_time = tm.time()
+
             bar.update(1)  # advance by one frame
             # say you have a frame counter:
             frame_idx += 1
@@ -674,32 +557,38 @@ if __name__ == "__main__":
             else:  # ByteTrack
                 detections = byte_track.update_with_detections(detections=detections)
 
-            # ============ ENHANCED: STORE VEHICLE DIMENSIONS ============
+            # ============ OPTIMIZED: BATCH TRANSFORM VEHICLE DIMENSIONS ============
             if len(detections) > 0:
-                # Transform all detection center points to world coordinates
-                det_centers = detections.get_anchors_coordinates(anchor=sv.Position.CENTER)
-                world_centers = view_transformer.transform_points(det_centers).astype(np.float32)
+                # Batch transform all box corners at once
+                all_corners = []
+                det_indices = []
 
-                # Calculate and store vehicle dimensions in meters
-                for i, (tracker_id, box) in enumerate(zip(detections.tracker_id, detections.xyxy)):
+                for i, box in enumerate(detections.xyxy):
                     x1, y1, x2, y2 = box
+                    corners = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]])
+                    all_corners.extend(corners)
+                    det_indices.extend([i] * 4)
 
-                    # Transform box corners to world coordinates
-                    corners_pixel = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]])
-                    corners_world = view_transformer.transform_points(corners_pixel)
+                if all_corners:
+                    all_corners = np.array(all_corners)
+                    all_corners_world = view_transformer.transform_points(all_corners)
 
-                    # Calculate dimensions in world coordinates
-                    width_m = np.linalg.norm(corners_world[1] - corners_world[0])
-                    height_m = np.linalg.norm(corners_world[3] - corners_world[0])
+                    # Process dimensions for each detection
+                    for i, tracker_id in enumerate(detections.tracker_id):
+                        start_idx = i * 4
+                        corners_world = all_corners_world[start_idx:start_idx + 4]
 
-                    # Store with temporal smoothing
-                    vehicle_dims_history[tracker_id].append((width_m, height_m))
+                        # Calculate dimensions
+                        width_m = np.linalg.norm(corners_world[1] - corners_world[0])
+                        height_m = np.linalg.norm(corners_world[3] - corners_world[0])
 
-                    # Use smoothed dimensions
-                    if len(vehicle_dims_history[tracker_id]) > 0:
-                        avg_width = np.mean([d[0] for d in vehicle_dims_history[tracker_id]])
-                        avg_height = np.mean([d[1] for d in vehicle_dims_history[tracker_id]])
-                        vehicle_dims[tracker_id] = (avg_width, avg_height)
+                        # Store with smoothing
+                        vehicle_dims_history[tracker_id].append((width_m, height_m))
+
+                        if len(vehicle_dims_history[tracker_id]) > 0:
+                            avg_width = np.mean([d[0] for d in vehicle_dims_history[tracker_id]])
+                            avg_height = np.mean([d[1] for d in vehicle_dims_history[tracker_id]])
+                            vehicle_dims[tracker_id] = (avg_width, avg_height)
 
             # ─── FIND WHICH DETECTIONS ARE INSIDE EITHER CURB-SIDE ZONE ───
             in_left = left_zone.trigger(detections)
@@ -800,88 +689,93 @@ if __name__ == "__main__":
                 for tid in tracker_ids:
                     last_seen_frame[tid] = frame_idx
 
-                # ============ ENHANCED TTC CALCULATION ============
+                # ============ OPTIMIZED TTC CALCULATION ============
+                # IMPORTANT: Only calculate TTC between vehicles that are BOTH currently visible
+                # This prevents "ghost collisions" with vehicles that have left the frame
+                ttc_start_time = tm.time()
+
                 # Get vehicle dimensions
                 my_dims = vehicle_dims.get(tracker_id, (2.0, 4.5))  # Default car size
 
-                # Create trajectory envelope for this vehicle
-                my_trajectory = predict_trajectory_envelope(
-                    kf_states[tracker_id],
-                    my_dims[0], my_dims[1],
-                    delta_t=args.future_prediction_interval,
-                    num_predictions=args.num_future_predictions
-                )
-                my_trajectory.tracker_id = tracker_id
+                # Create a sorted list of nearby vehicles for efficient checking
+                nearby_vehicles = []
+                my_x, my_y = Xf, Yf
 
-                # Check against all other active vehicles
+                # CRITICAL FIX: Only check TTC with vehicles currently visible in frame
+                current_frame_ids = set(detections.tracker_id.tolist())
+
                 for other_id, other_kf in kf_states.items():
                     if other_id == tracker_id:
                         continue
-                    if frame_idx - last_seen_frame.get(other_id, 0) > MAX_AGE_FRAMES:
+                    # Only consider vehicles that are currently detected
+                    if other_id not in current_frame_ids:
                         continue
 
+                    other_x, other_y = other_kf.statePost[0, 0], other_kf.statePost[1, 0]
+                    dist = math.hypot(other_x - my_x, other_y - my_y)
+
+                    if dist < 20.0:  # Only consider vehicles within 20m
+                        nearby_vehicles.append((dist, other_id, other_kf))
+
+                # Sort by distance and check only closest vehicles
+                nearby_vehicles.sort(key=lambda x: x[0])
+
+                for _, other_id, other_kf in nearby_vehicles[:5]:  # Check only 5 closest
                     # Get other vehicle dimensions
                     other_dims = vehicle_dims.get(other_id, (2.0, 4.5))
 
-                    # Create trajectory envelope for other vehicle
-                    other_trajectory = predict_trajectory_envelope(
-                        other_kf,
-                        other_dims[0], other_dims[1],
-                        delta_t=args.future_prediction_interval,
-                        num_predictions=args.num_future_predictions
-                    )
-                    other_trajectory.tracker_id = other_id
-
-                    # Find trajectory intersection
-                    intersection = find_trajectory_intersection(
-                        my_trajectory, other_trajectory,
-                        time_tolerance=0.2
+                    # Calculate simplified TTC
+                    ttc_result = calculate_simple_ttc(
+                        kf_states[tracker_id], other_kf,
+                        my_dims, other_dims
                     )
 
-                    if intersection:
-                        # Calculate enhanced TTC
-                        ttc_result = calculate_enhanced_ttc(
-                            my_trajectory, other_trajectory,
-                            intersection,
-                            kf_states[tracker_id], other_kf
-                        )
+                    if ttc_result and ttc_result['ttc'] <= args.ttc_threshold:
+                        follower_class = id_to_class.get(tracker_id, "unknown")
+                        leader_class = id_to_class.get(other_id, "unknown")
 
-                        if ttc_result and ttc_result['ttc'] <= args.ttc_threshold:
-                            follower_class = id_to_class.get(tracker_id, "unknown")
-                            leader_class = id_to_class.get(other_id, "unknown")
+                        # Determine lane type based on edge distance
+                        # Simplified calculation
+                        lane_type = "same_lane" if ttc_result['type'] == "rear_end" else "cross_lane"
 
-                            # Enhanced CSV row with intersection details
-                            ttc_rows.append([
-                                frame_idx,
-                                tracker_id, follower_class,
-                                other_id, leader_class,
-                                round(ttc_result.get('distance', 0), 2),
-                                round(ttc_result.get('rel_speed', 0), 2),
-                                round(ttc_result['ttc'], 2),
-                                ttc_result['type'],  # 'rear_end' or 'intersection'
-                                round(intersection['center_x'], 2),
-                                round(intersection['center_y'], 2),
-                                intersection['conflict_type']  # 'same_lane' or 'cross_lane'
-                            ])
+                        ttc_rows.append([
+                            frame_idx,
+                            tracker_id, follower_class,
+                            other_id, leader_class,
+                            round(ttc_result['distance'], 2),
+                            round(ttc_result['rel_speed'], 2),
+                            round(ttc_result['ttc'], 2),
+                            ttc_result['type'],
+                            round(ttc_result['intersection_x'], 2),
+                            round(ttc_result['intersection_y'], 2),
+                            lane_type
+                        ])
 
-                            ttc_labels[tracker_id] = [
-                                f"TTC->#{other_id}:{ttc_result['ttc']:.1f}s ({ttc_result['type']})"]
-                            ttc_event_count += 1
+                        # Double-check both vehicles are visible before showing TTC
+                        if tracker_id in current_frame_ids and other_id in current_frame_ids:
+                            ttc_labels[tracker_id] = [f"TTC->#{other_id}:{ttc_result['ttc']:.1f}s"]
+                        ttc_event_count += 1
+                        break  # Only show one TTC per vehicle
+
+                ttc_calc_times.append(tm.time() - ttc_start_time)
 
                 # record raw coords for history
                 coordinates[tracker_id].append((x, y))
 
-                # ============ VISUALIZE TRAJECTORY ENVELOPES ============
-                # Store simplified future positions for visualization
-                future_positions = []
-                for box in my_trajectory.boxes[:10]:  # Limit visualization
-                    future_positions.append((box.center_x, box.center_y))
+                # ============ SIMPLIFIED FUTURE VISUALIZATION ============
+                # Only calculate for visualization if needed
+                if len(active_ids) < 10:  # Only visualize for small number of vehicles
+                    future_positions = predict_future_positions_optimized(
+                        kf_states[tracker_id],
+                        delta_t=args.future_prediction_interval,
+                        num_predictions=args.num_future_predictions
+                    )
 
-                # Transform to pixel coordinates for display
-                if future_positions:
-                    future_positions_array = np.array(future_positions, dtype=np.float32)
-                    predicted_pixels = view_transformer.inverse_transform_points(future_positions_array)
-                    future_coordinates[tracker_id] = predicted_pixels.tolist()
+                    if future_positions:
+                        future_points = [(x, y) for x, y, _ in future_positions]
+                        future_positions_array = np.array(future_points, dtype=np.float32)
+                        predicted_pixels = view_transformer.inverse_transform_points(future_positions_array)
+                        future_coordinates[tracker_id] = predicted_pixels.tolist()
 
             # Clean up stale tracks
             to_remove = []
@@ -895,6 +789,7 @@ if __name__ == "__main__":
                 last_seen_frame.pop(tid, None)
                 vehicle_dims.pop(tid, None)
                 vehicle_dims_history.pop(tid, None)
+                trajectory_cache.pop(tid, None)  # Clear cache
 
             labels = []
             for tracker_id in detections.tracker_id:
@@ -965,7 +860,7 @@ if __name__ == "__main__":
                 # 3) draw each future point as a filled circle
                 for i, (cx, cy) in enumerate(in_bounds):
                     # Make dots progressively smaller/fainter for future points
-                    radius = max(2, 5 - i // 2)
+                    radius = max(2, 4 - i)
                     cv2.circle(
                         annotated_frame,
                         (cx, cy),
@@ -990,6 +885,10 @@ if __name__ == "__main__":
             )
 
             sink.write_frame(annotated_frame)
+
+            # Performance tracking
+            frame_times.append(tm.time() - frame_start_time)
+
             # Resize frame for display only
             display_frame = cv2.resize(annotated_frame, (1920, 1080))  # Width x Height
             # ----- after drawing on `frame_out` -------
@@ -1004,6 +903,13 @@ if __name__ == "__main__":
         # ➡ progress-bar update goes here
         bar.set_postfix(events=ttc_event_count)
         bar.update(1)
+
+        # ============ PERFORMANCE REPORT ============
+        print("\n=== Performance Report ===")
+        print(f"Average frame processing time: {np.mean(frame_times):.3f}s")
+        print(f"Average TTC calculation time: {np.mean(ttc_calc_times) if ttc_calc_times else 0:.4f}s")
+        print(f"Max frame time: {np.max(frame_times):.3f}s")
+        print(f"Processing FPS: {1 / np.mean(frame_times):.2f}")
 
         df = pd.DataFrame(
             csv_rows,
@@ -1027,10 +933,10 @@ if __name__ == "__main__":
                 "closing_distance_m",
                 "relative_velocity_m_s",
                 "ttc_s",
-                "collision_type",  # NEW: 'rear_end' or 'intersection'
-                "intersection_x",  # NEW: conflict point coordinates
+                "collision_type",  # 'rear_end' or 'intersection'
+                "intersection_x",  # conflict point coordinates
                 "intersection_y",
-                "lane_type"  # NEW: 'same_lane' or 'cross_lane'
+                "lane_type"  # 'same_lane' or 'cross_lane'
             ]
         )
         ttc_csv_file = out_dir / f"ttc_events_{timestamp}.csv"
