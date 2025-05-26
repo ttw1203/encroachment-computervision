@@ -1,3 +1,4 @@
+from inference import get_model
 import argparse
 from collections import defaultdict, deque
 import pandas as pd
@@ -67,8 +68,8 @@ def simplified_box_overlap(box1_center: Tuple[float, float], box1_dims: Tuple[fl
     return dx < (w1 + w2) / 2 and dy < (h1 + h2) / 2
 
 
-def predict_future_positions_optimized(kf, delta_t: float = 0.5,
-                                       num_predictions: int = 6,
+def predict_future_positions_optimized(kf, delta_t: float = 0.3,
+                                       num_predictions: int = 10,
                                        max_distance: float = 30.0) -> List[Tuple[float, float, float]]:
     """
     Optimized trajectory prediction - fewer points, simpler calculation.
@@ -79,7 +80,7 @@ def predict_future_positions_optimized(kf, delta_t: float = 0.5,
 
     # Skip if vehicle is nearly stationary
     speed = math.hypot(vx, vy)
-    if speed < 0.5:  # Less than 0.5 m/s
+    if speed < 0.1:  # Reduced from 0.5 to 0.1 m/s to show more trajectories
         return []
 
     for step in range(1, num_predictions + 1):
@@ -164,7 +165,7 @@ def calculate_simple_ttc(kf1, kf2, vehicle1_dims: Tuple[float, float],
 
 
 # ============ EXISTING FUNCTIONS (keep most unchanged) ============
-# map tracker_id → BGR colour tuple
+# map tracker_id → BGR colour tuple (only used if trajectory visualization is enabled)
 future_colors: dict[int, tuple[int, int, int]] = {}
 
 # Show live preview while processing?
@@ -300,6 +301,19 @@ class ViewTransformer:
 
 
 def parse_arguments() -> argparse.Namespace:
+    """
+    Parse command line arguments.
+
+    Usage examples:
+        # Run with default settings (no trajectory visualization)
+        python encZone.py
+
+        # Enable trajectory visualization
+        python encZone.py --show_trajectories
+
+        # Custom video paths with trajectories
+        python encZone.py --source_video_path input.mp4 --target_video_path output.mp4 --show_trajectories
+    """
     parser = argparse.ArgumentParser(
         description="Vehicle Speed Estimation using Ultralytics and Supervision"
     )
@@ -333,14 +347,19 @@ def parse_arguments() -> argparse.Namespace:
     )
     # 🚀 OPTIMIZED ARGUMENTS
     parser.add_argument(
+        "--show_trajectories",
+        action="store_true",
+        help="Enable visualization of future trajectory dots (default: disabled)"
+    )
+    parser.add_argument(
         "--num_future_predictions",
-        default=6,  # Reduced from 30 to 6 for performance
+        default=10,  # Increased from 6 to 10 for better trajectory visualization
         help="Number of future points to predict per vehicle",
         type=int
     )
     parser.add_argument(
         "--future_prediction_interval",
-        default=0.5,  # Increased from 0.1 to 0.5 for fewer calculations
+        default=0.3,  # Reduced from 0.5 to 0.3 for smoother trajectories
         help="Time interval (seconds) between future predictions",
         type=float
     )
@@ -402,7 +421,7 @@ if __name__ == "__main__":
     args = parse_arguments()
 
     video_info = sv.VideoInfo.from_video_path(video_path=args.source_video_path)
-    model = YOLO(MODEL_WEIGHTS or "yolov8l.pt")
+    model = get_model(model_id="taylor-swift-records/3")
     model.to(DEVICE)
 
     CLIP_SECONDS = 20  # process only the first 20 s
@@ -763,8 +782,8 @@ if __name__ == "__main__":
                 coordinates[tracker_id].append((x, y))
 
                 # ============ SIMPLIFIED FUTURE VISUALIZATION ============
-                # Only calculate for visualization if needed
-                if len(active_ids) < 10:  # Only visualize for small number of vehicles
+                # Only calculate and store trajectories if visualization is enabled
+                if args.show_trajectories:
                     future_positions = predict_future_positions_optimized(
                         kf_states[tracker_id],
                         delta_t=args.future_prediction_interval,
@@ -832,43 +851,44 @@ if __name__ == "__main__":
             )
 
             # ─── draw future trajectories as DOTS with per-ID colours ───
-            h, w = annotated_frame.shape[:2]
+            if args.show_trajectories:
+                h, w = annotated_frame.shape[:2]
 
-            for tid in list(future_coordinates.keys()):
-                # 1) drop stale tracks
-                if tid not in active_ids:
-                    future_coordinates.pop(tid, None)
-                    continue
+                for tid in list(future_coordinates.keys()):
+                    # 1) drop stale tracks
+                    if tid not in active_ids:
+                        future_coordinates.pop(tid, None)
+                        continue
 
-                # 2) keep only points inside the frame
-                in_bounds = [
-                    (int(x), int(y))
-                    for x, y in future_coordinates[tid]
-                    if 0 <= x < w and 0 <= y < h
-                ]
-                if not in_bounds:  # nothing to plot
-                    continue
+                    # 2) keep only points inside the frame
+                    in_bounds = [
+                        (int(x), int(y))
+                        for x, y in future_coordinates[tid]
+                        if 0 <= x < w and 0 <= y < h
+                    ]
+                    if not in_bounds:  # nothing to plot
+                        continue
 
-                # colour cache (one colour per track ID)
-                colour = future_colors.setdefault(
-                    tid,
-                    (random.randint(0, 255),
-                     random.randint(0, 255),
-                     random.randint(0, 255))
-                )
-
-                # 3) draw each future point as a filled circle
-                for i, (cx, cy) in enumerate(in_bounds):
-                    # Make dots progressively smaller/fainter for future points
-                    radius = max(2, 4 - i)
-                    cv2.circle(
-                        annotated_frame,
-                        (cx, cy),
-                        radius=radius,
-                        color=colour,
-                        thickness=-1,  # –1 ⇒ filled
-                        lineType=cv2.LINE_AA
+                    # colour cache (one colour per track ID)
+                    colour = future_colors.setdefault(
+                        tid,
+                        (random.randint(0, 255),
+                         random.randint(0, 255),
+                         random.randint(0, 255))
                     )
+
+                    # 3) draw each future point as a filled circle
+                    for i, (cx, cy) in enumerate(in_bounds):
+                        # Make dots progressively smaller for future points
+                        radius = max(3, 6 - i)  # Increased from max(2, 4-i) for better visibility
+                        cv2.circle(
+                            annotated_frame,
+                            (cx, cy),
+                            radius=radius,
+                            color=colour,
+                            thickness=-1,  # –1 ⇒ filled
+                            lineType=cv2.LINE_AA
+                        )
 
             annotated_frame = box_annotator.annotate(
                 scene=annotated_frame, detections=detections
@@ -906,6 +926,7 @@ if __name__ == "__main__":
 
         # ============ PERFORMANCE REPORT ============
         print("\n=== Performance Report ===")
+        print(f"Trajectory visualization: {'ENABLED' if args.show_trajectories else 'DISABLED (default)'}")
         print(f"Average frame processing time: {np.mean(frame_times):.3f}s")
         print(f"Average TTC calculation time: {np.mean(ttc_calc_times) if ttc_calc_times else 0:.4f}s")
         print(f"Max frame time: {np.max(frame_times):.3f}s")
