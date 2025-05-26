@@ -1,10 +1,9 @@
-from inference import get_model
 import argparse
 from collections import defaultdict, deque
 import pandas as pd
 import logging
 import math
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Set
 
 from tqdm import tqdm
 import time as tm
@@ -40,6 +39,312 @@ vehicle_dims_history: Dict[int, deque] = defaultdict(lambda: deque(maxlen=5))  #
 
 # Cache for trajectory predictions to avoid recalculation
 trajectory_cache: Dict[int, Tuple[List[Tuple[float, float]], float]] = {}  # tracker_id -> (positions, last_update_time)
+
+# ============ DEBUG VISUALIZATION STRUCTURES ============
+# Store collision points for visualization
+collision_points: Dict[int, List[Dict]] = defaultdict(list)  # frame_idx -> list of collision info
+# Store oriented boxes for selected vehicles
+selected_vehicle_ids: Set[int] = set()  # User-specified vehicles for detailed visualization
+# Store trajectory envelopes for visualization
+trajectory_envelopes: Dict[int, List[np.ndarray]] = {}  # tracker_id -> list of oriented box corners
+
+
+# ============ ORIENTED BOX UTILITIES ============
+class OrientedBox:
+    """Represents an oriented bounding box for accurate collision detection."""
+
+    def __init__(self, center: Tuple[float, float], dimensions: Tuple[float, float],
+                 velocity: Tuple[float, float], angle: Optional[float] = None):
+        self.center = np.array(center)
+        self.width, self.height = dimensions
+        self.velocity = np.array(velocity)
+
+        # Calculate angle from velocity if not provided
+        if angle is None:
+            self.angle = np.arctan2(velocity[1], velocity[0]) if np.linalg.norm(velocity) > 0.1 else 0
+        else:
+            self.angle = angle
+
+    def get_corners(self) -> np.ndarray:
+        """Get the four corners of the oriented box."""
+        cos_a = np.cos(self.angle)
+        sin_a = np.sin(self.angle)
+
+        # Half dimensions
+        hw, hh = self.width / 2, self.height / 2
+
+        # Rotation matrix
+        R = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+
+        # Local corners
+        corners_local = np.array([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]])
+
+        # Rotate and translate
+        corners = np.dot(corners_local, R.T) + self.center
+        return corners
+
+    def at_time(self, t: float) -> 'OrientedBox':
+        """Get the box position at future time t."""
+        future_center = self.center + self.velocity * t
+        return OrientedBox(future_center, (self.width, self.height), self.velocity, self.angle)
+
+
+def draw_oriented_box(frame: np.ndarray, box: OrientedBox, color: Tuple[int, int, int],
+                      thickness: int = 2, alpha: float = 0.3) -> np.ndarray:
+    """Draw an oriented box with optional transparency."""
+    corners = box.get_corners().astype(np.int32)
+
+    # Create overlay for transparency
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [corners], color)
+
+    # Blend with original
+    result = cv2.addWeighted(frame, 1 - alpha, overlay, alpha, 0)
+
+    # Draw edges
+    cv2.polylines(result, [corners], True, color, thickness)
+
+    return result
+
+
+def calculate_oriented_ttc(kf1, kf2, vehicle1_dims: Tuple[float, float],
+                           vehicle2_dims: Tuple[float, float]) -> Optional[Dict]:
+    """
+    Enhanced TTC calculation using oriented bounding boxes.
+    Returns detailed collision information including trajectory envelopes.
+    """
+    # Get states
+    x1, y1, vx1, vy1 = kf1.statePost.flatten()
+    x2, y2, vx2, vy2 = kf2.statePost.flatten()
+
+    # Quick distance check
+    current_dist = math.hypot(x2 - x1, y2 - y1)
+    if current_dist > 20.0:  # Ignore vehicles more than 20m apart
+        return None
+
+    # Create oriented boxes
+    box1 = OrientedBox((x1, y1), vehicle1_dims, (vx1, vy1))
+    box2 = OrientedBox((x2, y2), vehicle2_dims, (vx2, vy2))
+
+    # Relative motion
+    dvx = vx2 - vx1
+    dvy = vy2 - vy1
+    rel_speed = math.hypot(dvx, dvy)
+
+    # Skip if relative speed is too low
+    if rel_speed < 0.5:
+        return None
+
+    # Simple TTC calculation based on closest approach
+    dx = x2 - x1
+    dy = y2 - y1
+
+    # Project when they'll be closest
+    dot_product = dx * dvx + dy * dvy
+    if dot_product >= 0:  # Moving away from each other
+        return None
+
+    # Time to closest approach
+    ttc = -dot_product / (rel_speed ** 2)
+
+    if ttc <= 0 or ttc > 3.0:  # Only consider next 3 seconds
+        return None
+
+    # Get future boxes
+    future_box1 = box1.at_time(ttc)
+    future_box2 = box2.at_time(ttc)
+
+    # Check if boxes would overlap
+    if check_oriented_box_overlap(future_box1, future_box2):
+        # Determine collision type based on relative angle
+        angle = abs(math.atan2(vy2 - vy1, vx2 - vx1) - math.atan2(vy1, vx1))
+        angle = min(angle, 2 * math.pi - angle)  # Normalize to [0, π]
+
+        collision_type = "rear_end" if angle < math.pi / 4 else "intersection"
+
+        # Calculate exact intersection point
+        intersection_point = (future_box1.center + future_box2.center) / 2
+
+        # Generate trajectory envelopes for visualization
+        envelope1 = generate_trajectory_envelope(box1, ttc)
+        envelope2 = generate_trajectory_envelope(box2, ttc)
+
+        # Check if same lane (envelope edges close)
+        edge_distance = calculate_envelope_edge_distance(envelope1, envelope2)
+        lane_type = "same_lane" if edge_distance < 1.5 else "cross_lane"
+
+        return {
+            'ttc': ttc,
+            'type': collision_type,
+            'distance': current_dist,
+            'rel_speed': rel_speed,
+            'intersection_x': intersection_point[0],
+            'intersection_y': intersection_point[1],
+            'lane_type': lane_type,
+            'edge_distance': edge_distance,
+            'envelope1': envelope1,
+            'envelope2': envelope2,
+            'box1': box1,
+            'box2': box2,
+            'future_box1': future_box1,
+            'future_box2': future_box2
+        }
+
+    return None
+
+
+def check_oriented_box_overlap(box1: OrientedBox, box2: OrientedBox) -> bool:
+    """Check if two oriented boxes overlap using Separating Axis Theorem."""
+    corners1 = box1.get_corners()
+    corners2 = box2.get_corners()
+
+    # Get all potential separating axes
+    axes = []
+    for i in range(4):
+        # Edges of box1
+        edge = corners1[(i + 1) % 4] - corners1[i]
+        axes.append(np.array([-edge[1], edge[0]]))  # Perpendicular
+
+        # Edges of box2
+        edge = corners2[(i + 1) % 4] - corners2[i]
+        axes.append(np.array([-edge[1], edge[0]]))  # Perpendicular
+
+    # Check each axis
+    for axis in axes:
+        # Normalize axis
+        axis = axis / np.linalg.norm(axis)
+
+        # Project all corners onto axis
+        proj1 = np.dot(corners1, axis)
+        proj2 = np.dot(corners2, axis)
+
+        # Check for separation
+        if np.max(proj1) < np.min(proj2) or np.max(proj2) < np.min(proj1):
+            return False  # Separated on this axis
+
+    return True  # No separating axis found, boxes overlap
+
+
+def generate_trajectory_envelope(box: OrientedBox, time_horizon: float,
+                                 num_steps: int = 10) -> List[np.ndarray]:
+    """Generate the trajectory envelope as a series of oriented boxes."""
+    envelope = []
+    for i in range(num_steps + 1):
+        t = (i / num_steps) * time_horizon
+        future_box = box.at_time(t)
+        envelope.append(future_box.get_corners())
+    return envelope
+
+
+def calculate_envelope_edge_distance(envelope1: List[np.ndarray],
+                                     envelope2: List[np.ndarray]) -> float:
+    """Calculate minimum distance between envelope edges."""
+    min_distance = float('inf')
+
+    # Sample points along envelopes
+    for corners1, corners2 in zip(envelope1, envelope2):
+        # Check left/right edges
+        for i in [0, 1]:  # Left and right edges
+            edge1_start = corners1[i]
+            edge1_end = corners1[(i + 3) % 4]
+            edge2_start = corners2[i]
+            edge2_end = corners2[(i + 3) % 4]
+
+            # Point to line distance
+            dist = min(
+                point_to_line_distance(edge1_start, edge2_start, edge2_end),
+                point_to_line_distance(edge2_start, edge1_start, edge1_end)
+            )
+            min_distance = min(min_distance, dist)
+
+    return min_distance
+
+
+def point_to_line_distance(point: np.ndarray, line_start: np.ndarray,
+                           line_end: np.ndarray) -> float:
+    """Calculate perpendicular distance from point to line segment."""
+    line_vec = line_end - line_start
+    point_vec = point - line_start
+    line_len = np.linalg.norm(line_vec)
+
+    if line_len < 0.001:
+        return np.linalg.norm(point_vec)
+
+    line_unitvec = line_vec / line_len
+    proj_length = np.dot(point_vec, line_unitvec)
+
+    if proj_length < 0:
+        return np.linalg.norm(point_vec)
+    elif proj_length > line_len:
+        return np.linalg.norm(point - line_end)
+    else:
+        return np.linalg.norm(point_vec - proj_length * line_unitvec)
+
+
+def draw_collision_point(frame: np.ndarray, world_point: Tuple[float, float],
+                         view_transformer: 'ViewTransformer', ttc: float,
+                         color: Optional[Tuple[int, int, int]] = None) -> np.ndarray:
+    """Draw collision point with TTC information."""
+    if color is None:
+        # Color based on urgency: red for <1s, orange for <2s, yellow for <3s
+        if ttc < 1.0:
+            color = (0, 0, 255)  # Red
+        elif ttc < 2.0:
+            color = (0, 165, 255)  # Orange
+        else:
+            color = (0, 255, 255)  # Yellow
+
+    # Transform to pixel coordinates
+    pixel_point = view_transformer.inverse_transform_points(
+        np.array([[world_point[0], world_point[1]]])
+    )[0]
+
+    px, py = int(pixel_point[0]), int(pixel_point[1])
+
+    # Draw crosshair
+    cv2.line(frame, (px - 15, py), (px + 15, py), color, 3)
+    cv2.line(frame, (px, py - 15), (px, py + 15), color, 3)
+
+    # Draw circle
+    cv2.circle(frame, (px, py), 10, color, 3)
+
+    # Add TTC text
+    cv2.putText(frame, f"TTC: {ttc:.1f}s", (px + 20, py - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+    return frame
+
+
+def draw_trajectory_envelope_edges(frame: np.ndarray, envelope: List[np.ndarray],
+                                   view_transformer: 'ViewTransformer',
+                                   color: Tuple[int, int, int], label: str = "") -> np.ndarray:
+    """Draw the edges of a trajectory envelope."""
+    # Transform all points to pixel coordinates
+    pixel_envelope = []
+    for corners in envelope:
+        pixel_corners = view_transformer.inverse_transform_points(corners)
+        pixel_envelope.append(pixel_corners.astype(np.int32))
+
+    # Draw left and right edges
+    if len(pixel_envelope) > 1:
+        # Left edge
+        left_points = np.array([corners[0] for corners in pixel_envelope])
+        cv2.polylines(frame, [left_points], False, color, 2)
+
+        # Right edge
+        right_points = np.array([corners[1] for corners in pixel_envelope])
+        cv2.polylines(frame, [right_points], False, color, 2)
+
+        # Draw some connecting lines for clarity
+        for i in range(0, len(pixel_envelope), 3):
+            cv2.polylines(frame, [pixel_envelope[i]], True, color, 1)
+
+    # Add label if provided
+    if label and len(pixel_envelope) > 0:
+        cv2.putText(frame, label, tuple(pixel_envelope[0][0]),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    return frame
 
 
 # ============ SIMPLIFIED AND OPTIMIZED UTILITY FUNCTIONS ============
@@ -313,9 +618,13 @@ def parse_arguments() -> argparse.Namespace:
 
         # Custom video paths with trajectories
         python encZone.py --source_video_path input.mp4 --target_video_path output.mp4 --show_trajectories
+
+        # Debug visualization options
+        python encZone.py --show_collision_points --show_oriented_boxes --debug_vehicles 123,456
+        python encZone.py --show_envelope_edges --show_collision_points
     """
     parser = argparse.ArgumentParser(
-        description="Vehicle Speed Estimation using Ultralytics and Supervision"
+        description="Vehicle Speed Estimation using Ultralytics and Supervision with Enhanced Debug Visualization"
     )
     parser.add_argument(
         "--no_blend_zones",
@@ -381,6 +690,46 @@ def parse_arguments() -> argparse.Namespace:
         help="Tracking backend to use (default: strongsort)",
     )
 
+    # ============ DEBUG VISUALIZATION ARGUMENTS ============
+    parser.add_argument(
+        "--show_collision_points",
+        action="store_true",
+        help="Visualize predicted collision points on video frames (default: disabled)"
+    )
+    parser.add_argument(
+        "--show_oriented_boxes",
+        action="store_true",
+        help="Show full predicted oriented boxes for future time steps (default: disabled)"
+    )
+    parser.add_argument(
+        "--debug_vehicles",
+        type=str,
+        default="",
+        help="Comma-separated list of vehicle IDs to show detailed visualization (e.g., '123,456')"
+    )
+    parser.add_argument(
+        "--show_envelope_edges",
+        action="store_true",
+        help="Visualize trajectory envelope edges for same-lane collision verification (default: disabled)"
+    )
+    parser.add_argument(
+        "--oriented_box_interval",
+        default=0.5,
+        help="Time interval (seconds) between oriented box visualizations",
+        type=float
+    )
+    parser.add_argument(
+        "--oriented_box_steps",
+        default=6,
+        help="Number of future oriented boxes to show per vehicle",
+        type=int
+    )
+    parser.add_argument(
+        "--use_oriented_ttc",
+        action="store_true",
+        help="Use full oriented box TTC calculation instead of simplified version (slower but more accurate)"
+    )
+
     return parser.parse_args()
 
 
@@ -420,8 +769,13 @@ future_coordinates = defaultdict(list)  # Store future (x, y) points
 if __name__ == "__main__":
     args = parse_arguments()
 
+    # Parse debug vehicle IDs
+    if args.debug_vehicles:
+        selected_vehicle_ids = set(int(vid.strip()) for vid in args.debug_vehicles.split(',') if vid.strip())
+        print(f"Debug visualization enabled for vehicles: {selected_vehicle_ids}")
+
     video_info = sv.VideoInfo.from_video_path(video_path=args.source_video_path)
-    model = get_model(model_id="taylor-swift-records/3")
+    model = YOLO(MODEL_WEIGHTS or "yolov8l.pt")
     model.to(DEVICE)
 
     CLIP_SECONDS = 20  # process only the first 20 s
@@ -546,6 +900,12 @@ if __name__ == "__main__":
                 break
             # ─── CLEAR OLD TTC LABELS ───
             ttc_labels.clear()
+
+            # Clear collision points that are too old (keep last 30 frames)
+            old_frames = [k for k in collision_points.keys() if frame_idx - k >= 30]
+            for k in old_frames:
+                del collision_points[k]
+
             result = model(frame)[0]
             detections = sv.Detections.from_ultralytics(result)
             detections = detections[detections.confidence > args.confidence_threshold]
@@ -743,11 +1103,17 @@ if __name__ == "__main__":
                     # Get other vehicle dimensions
                     other_dims = vehicle_dims.get(other_id, (2.0, 4.5))
 
-                    # Calculate simplified TTC
-                    ttc_result = calculate_simple_ttc(
-                        kf_states[tracker_id], other_kf,
-                        my_dims, other_dims
-                    )
+                    # Calculate TTC using selected method
+                    if args.use_oriented_ttc:
+                        ttc_result = calculate_oriented_ttc(
+                            kf_states[tracker_id], other_kf,
+                            my_dims, other_dims
+                        )
+                    else:
+                        ttc_result = calculate_simple_ttc(
+                            kf_states[tracker_id], other_kf,
+                            my_dims, other_dims
+                        )
 
                     if ttc_result and ttc_result['ttc'] <= args.ttc_threshold:
                         follower_class = id_to_class.get(tracker_id, "unknown")
@@ -755,7 +1121,24 @@ if __name__ == "__main__":
 
                         # Determine lane type based on edge distance
                         # Simplified calculation
-                        lane_type = "same_lane" if ttc_result['type'] == "rear_end" else "cross_lane"
+                        lane_type = ttc_result.get('lane_type',
+                                                   "same_lane" if ttc_result['type'] == "rear_end" else "cross_lane")
+
+                        # Store collision point for visualization
+                        if args.show_collision_points:
+                            collision_points[frame_idx].append({
+                                'x': ttc_result['intersection_x'],
+                                'y': ttc_result['intersection_y'],
+                                'ttc': ttc_result['ttc'],
+                                'v1_id': tracker_id,
+                                'v2_id': other_id,
+                                'type': ttc_result['type']
+                            })
+
+                        # Store trajectory envelopes if available
+                        if args.show_envelope_edges and 'envelope1' in ttc_result:
+                            trajectory_envelopes[tracker_id] = ttc_result['envelope1']
+                            trajectory_envelopes[other_id] = ttc_result['envelope2']
 
                         ttc_rows.append([
                             frame_idx,
@@ -809,6 +1192,7 @@ if __name__ == "__main__":
                 vehicle_dims.pop(tid, None)
                 vehicle_dims_history.pop(tid, None)
                 trajectory_cache.pop(tid, None)  # Clear cache
+                trajectory_envelopes.pop(tid, None)  # Clear envelope
 
             labels = []
             for tracker_id in detections.tracker_id:
@@ -849,6 +1233,70 @@ if __name__ == "__main__":
             annotated_frame = trace_annotator.annotate(
                 scene=annotated_frame, detections=detections
             )
+
+            # ============ ENHANCED DEBUG VISUALIZATIONS ============
+
+            # 1. Draw collision points
+            if args.show_collision_points:
+                for frame_points in collision_points.values():
+                    for point in frame_points:
+                        annotated_frame = draw_collision_point(
+                            annotated_frame,
+                            (point['x'], point['y']),
+                            view_transformer,
+                            point['ttc']
+                        )
+
+            # 2. Draw oriented boxes for selected vehicles
+            if args.show_oriented_boxes and selected_vehicle_ids:
+                for tid in selected_vehicle_ids:
+                    if tid in kf_states and tid in current_frame_ids:
+                        kf = kf_states[tid]
+                        dims = vehicle_dims.get(tid, (2.0, 4.5))
+                        x, y, vx, vy = kf.statePost.flatten()
+
+                        # Current box
+                        current_box = OrientedBox((x, y), dims, (vx, vy))
+
+                        # Future boxes
+                        for i in range(1, args.oriented_box_steps + 1):
+                            t = i * args.oriented_box_interval
+                            future_box = current_box.at_time(t)
+
+                            # Transform to pixel coordinates
+                            corners_world = future_box.get_corners()
+                            corners_pixel = view_transformer.inverse_transform_points(corners_world)
+
+                            # Draw with decreasing opacity
+                            alpha = 0.3 * (1 - i / (args.oriented_box_steps + 1))
+                            color = future_colors.get(tid, (0, 255, 0))
+
+                            annotated_frame = draw_oriented_box(
+                                annotated_frame,
+                                OrientedBox(
+                                    corners_pixel.mean(axis=0),
+                                    dims,
+                                    (vx, vy),
+                                    future_box.angle
+                                ),
+                                color,
+                                thickness=1,
+                                alpha=alpha
+                            )
+
+            # 3. Draw trajectory envelope edges
+            if args.show_envelope_edges and trajectory_envelopes:
+                for tid, envelope in trajectory_envelopes.items():
+                    if tid in current_frame_ids:
+                        color = (255, 0, 0) if tid in selected_vehicle_ids else (0, 255, 255)
+                        label = f"#{tid}" if tid in selected_vehicle_ids else ""
+                        annotated_frame = draw_trajectory_envelope_edges(
+                            annotated_frame,
+                            envelope,
+                            view_transformer,
+                            color,
+                            label
+                        )
 
             # ─── draw future trajectories as DOTS with per-ID colours ───
             if args.show_trajectories:
@@ -927,6 +1375,10 @@ if __name__ == "__main__":
         # ============ PERFORMANCE REPORT ============
         print("\n=== Performance Report ===")
         print(f"Trajectory visualization: {'ENABLED' if args.show_trajectories else 'DISABLED (default)'}")
+        print(f"Collision point visualization: {'ENABLED' if args.show_collision_points else 'DISABLED'}")
+        print(f"Oriented box visualization: {'ENABLED' if args.show_oriented_boxes else 'DISABLED'}")
+        print(f"Envelope edge visualization: {'ENABLED' if args.show_envelope_edges else 'DISABLED'}")
+        print(f"TTC calculation method: {'ORIENTED' if args.use_oriented_ttc else 'SIMPLIFIED (default)'}")
         print(f"Average frame processing time: {np.mean(frame_times):.3f}s")
         print(f"Average TTC calculation time: {np.mean(ttc_calc_times) if ttc_calc_times else 0:.4f}s")
         print(f"Max frame time: {np.max(frame_times):.3f}s")
