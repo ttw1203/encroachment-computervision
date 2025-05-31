@@ -424,7 +424,7 @@ if __name__ == "__main__":
             detections = detections[polygon_zone.trigger(detections)]
             detections = detections.with_nms(threshold=args.iou_threshold)
             # ✂ Ignore riders so that only true pedestrians remain
-            detections = filter_rider_persons(detections, iou_thr=0.50)
+            #detections = filter_rider_persons(detections, iou_thr=0.50)
             if args.tracker == "strongsort":
                 tracks = strong_sort.update(
                     sv_to_boxmot(detections),
