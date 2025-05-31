@@ -200,7 +200,7 @@ project_root/
 
 ## License
 
-[Your License Here]
+MIT License
 
 ## Acknowledgments
 
