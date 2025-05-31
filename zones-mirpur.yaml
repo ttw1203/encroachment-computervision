@@ -1,0 +1,31 @@
+# Encroachment Zone definitions
+left_zone:
+  - [1531, 780]
+  - [1778, 785]
+  - [837, 2160]
+  - [-219, 2160]
+
+right_zone:
+  - [2092, 790]
+  - [2427, 797]
+  - [4618, 2160]
+  - [3628, 2160]
+
+# Segment lines
+segment_entry: [[1977, 1137], [2800, 1152]]   # upstream line
+segment_exit: [[2019, 1466], [3342, 1490]]   # downstream line
+
+# View transformation parameters
+source_points:
+  - [1666, 783]
+  - [2222, 793]
+  - [5574, 2878]
+  - [-843, 2761]
+
+target_width: 19
+target_height: 78
+
+#[[-0.0000  0.0118]
+# [18.9069  0.0000]
+# [19.0072 77.6902]
+# [-0.0092 77.8800]]

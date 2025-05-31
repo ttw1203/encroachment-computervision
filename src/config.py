@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 class Config:
     """Centralized configuration management."""
 
-    def __init__(self, env_path: str = ".env.bns"):
+    def __init__(self, env_path: str = ".env.mirpur"):
         """Initialize configuration from environment file."""
         load_dotenv(dotenv_path=env_path)
 
@@ -71,10 +71,13 @@ class Config:
 
     def get_source_target_points(self) -> Tuple[np.ndarray, np.ndarray]:
         """Get source and target points for view transformation."""
-        SOURCE = np.array([[1281, 971], [2309, 971], [6090, 2160], [-2243, 2160]])
+        with open(self.ENC_ZONE_CONFIG, "r") as f:
+            data = yaml.safe_load(f)
 
-        TARGET_WIDTH = 50
-        TARGET_HEIGHT = 130
+        SOURCE = np.array(data.get("source_points", [[1281, 971], [2309, 971], [6090, 2160], [-2243, 2160]]))
+        TARGET_WIDTH = data.get("target_width", 50)
+        TARGET_HEIGHT = data.get("target_height", 130)
+
         TARGET = np.array([
             [0, 0],
             [TARGET_WIDTH - 1, 0],
