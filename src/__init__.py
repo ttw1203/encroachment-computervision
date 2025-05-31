@@ -1,0 +1,1 @@
+"""Computer vision pipeline for vehicle tracking and analysis."""
