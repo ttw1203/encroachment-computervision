@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 1.0.0
 
 ### Added
 - Speed calibration support using multiple models:
