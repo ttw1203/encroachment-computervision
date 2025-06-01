@@ -1,4 +1,4 @@
-"""Main script for running the vehicle tracking and analysis pipeline."""
+"""Main script for running the vehicle tracking and analysis pipeline with enhanced stability."""
 import argparse
 import logging
 from collections import defaultdict, deque
@@ -98,8 +98,51 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Enable segment-based speed calibration (default: off)"
     )
+    # New stability parameters
+    parser.add_argument(
+        "--speed_smoothing_window",
+        default=5,
+        type=int,
+        help="Number of frames to use for speed smoothing (default: 5)"
+    )
+    parser.add_argument(
+        "--max_acceleration",
+        default=5.0,
+        type=float,
+        help="Maximum allowed acceleration in m/s² (default: 5.0)"
+    )
+    parser.add_argument(
+        "--min_speed_threshold",
+        default=0.1,
+        type=float,
+        help="Minimum speed threshold in m/s below which velocity is set to 0 (default: 0.1)"
+    )
 
     return parser.parse_args()
+
+
+def validate_detection_consistency(detections: sv.Detections, previous_detections: dict[int, np.ndarray],
+                                 max_pixel_jump: float = 100.0) -> sv.Detections:
+    """Validate detections to prevent ID switches and large position jumps."""
+    if len(detections) == 0:
+        return detections
+
+    valid_mask = np.ones(len(detections), dtype=bool)
+
+    for idx, tracker_id in enumerate(detections.tracker_id):
+        if tracker_id in previous_detections:
+            # Check for unrealistic position jumps
+            current_center = detections.get_anchors_coordinates(sv.Position.CENTER)[idx]
+            prev_center = previous_detections[tracker_id]
+
+            distance = np.linalg.norm(current_center - prev_center)
+
+            if distance > max_pixel_jump:
+                # Mark as invalid - likely an ID switch or detection error
+                valid_mask[idx] = False
+                logging.warning(f"Tracker {tracker_id}: Large position jump detected ({distance:.1f} pixels)")
+
+    return detections[valid_mask]
 
 
 def main():
@@ -112,6 +155,46 @@ def main():
 
     # Set up logging
     logging.getLogger('ultralytics').setLevel(logging.CRITICAL)
+
+    # Define master calibration function based on configuration
+    model_type = config.SPEED_CALIBRATION_MODEL_TYPE.lower()
+
+    if model_type in ["linear", "ransac_linear"]:
+        def calibration_func(raw_speed_m_s: float) -> float:
+            return config.SPEED_CALIBRATION_MODEL_A * raw_speed_m_s + config.SPEED_CALIBRATION_MODEL_B
+
+    elif model_type == "poly2":
+        # Parse polynomial coefficients
+        try:
+            coeffs = [float(x.strip()) for x in config.SPEED_CALIBRATION_POLY_COEFFS.split(',')]
+            if len(coeffs) != 3:
+                logging.warning(f"Invalid number of coefficients for poly2 model. Expected 3, got {len(coeffs)}. Using no calibration.")
+                calibration_func = lambda x: x
+            else:
+                def calibration_func(raw_speed_m_s: float) -> float:
+                    return coeffs[0] + coeffs[1] * raw_speed_m_s + coeffs[2] * (raw_speed_m_s**2)
+        except Exception as e:
+            logging.warning(f"Error parsing poly2 coefficients: {e}. Using no calibration.")
+            calibration_func = lambda x: x
+
+    elif model_type == "poly3":
+        # Parse polynomial coefficients
+        try:
+            coeffs = [float(x.strip()) for x in config.SPEED_CALIBRATION_POLY_COEFFS.split(',')]
+            if len(coeffs) != 4:
+                logging.warning(f"Invalid number of coefficients for poly3 model. Expected 4, got {len(coeffs)}. Using no calibration.")
+                calibration_func = lambda x: x
+            else:
+                def calibration_func(raw_speed_m_s: float) -> float:
+                    return coeffs[0] + coeffs[1] * raw_speed_m_s + coeffs[2] * (raw_speed_m_s**2) + coeffs[3] * (raw_speed_m_s**3)
+        except Exception as e:
+            logging.warning(f"Error parsing poly3 coefficients: {e}. Using no calibration.")
+            calibration_func = lambda x: x
+
+    else:
+        # Default: no calibration
+        logging.warning(f"Unknown calibration model type: {model_type}. Using no calibration.")
+        calibration_func = lambda x: x
 
     # Load zone configurations
     LEFT_ZONE_POLY, RIGHT_ZONE_POLY = Config.load_zones(args.zones_file)
@@ -151,8 +234,12 @@ def main():
         video_fps=video_info.fps
     )
 
-    # Kalman filter manager
-    kf_manager = KalmanFilterManager()
+    # Kalman filter manager with stability parameters
+    kf_manager = KalmanFilterManager(
+        speed_smoothing_window=args.speed_smoothing_window,
+        max_acceleration=args.max_acceleration,
+        min_speed_threshold=args.min_speed_threshold
+    )
 
     # Zone management
     zone_manager = ZoneManager(
@@ -179,14 +266,12 @@ def main():
         video_fps=video_info.fps
     )
 
-    # Event processor
+    # Event processor with calibration function
     event_processor = EventProcessor(
         video_fps=video_info.fps,
-        collision_distance=config.COLLISION_DISTANCE
+        collision_distance=config.COLLISION_DISTANCE,
+        calibration_func=calibration_func
     )
-
-    # IO manager
-    io_manager = IOManager()
 
     # IO manager using environment variable
     io_manager = IOManager(output_dir=config.RESULTS_OUTPUT_DIR)
@@ -199,6 +284,7 @@ def main():
     ttc_event_count = 0
 
     last_seen_frame = {}
+    previous_detections = {}  # Store previous detection positions
     MAX_AGE_FRAMES = int(video_info.fps * config.MAX_AGE_SECONDS)
 
     # Progress bar
@@ -225,6 +311,15 @@ def main():
 
             # Filter riders if needed
             # detections = filter_rider_persons(detections, iou_thr=0.50)
+
+            # Validate detection consistency
+            detections = validate_detection_consistency(detections, previous_detections)
+
+            # Update previous detections
+            if len(detections) > 0:
+                centers = detections.get_anchors_coordinates(sv.Position.CENTER)
+                for idx, tid in enumerate(detections.tracker_id):
+                    previous_detections[tid] = centers[idx]
 
             # Check encroachment
             new_enc_events = zone_manager.check_encroachment(
@@ -256,8 +351,14 @@ def main():
                 dt = 1 / video_info.fps
                 kf = kf_manager.update_or_create(tracker_id, x, y, dt)
 
-                # Get current state
-                Xf, Yf, Vx, Vy = kf.statePost.flatten()
+                # Apply speed calibration with stability
+                kf_manager.apply_speed_calibration(tracker_id, calibration_func)
+
+                # Get current state (now with calibrated and stabilized velocity)
+                Xf, Yf, _, _ = kf.statePost.flatten()
+
+                # Get smoothed velocity for display
+                Vx_smooth, Vy_smooth = kf_manager.get_smoothed_velocity(tracker_id)
 
                 # Process segment speed if enabled
                 if args.segment_speed:
@@ -269,36 +370,15 @@ def main():
                         ENTRY_LINE, EXIT_LINE
                     )
 
-                # Calculate speed
+                # Store coordinates for visualization
                 coordinates[tracker_id].append((x, y))
 
-                if len(coordinates[tracker_id]) >= video_info.fps / 2:
-                    (x_start, y_start) = coordinates[tracker_id][0]
-                    (x_end, y_end) = coordinates[tracker_id][-1]
+                # Update class mapping
+                class_id = int(detections.class_id[det_idx])
+                class_name = detector_tracker.get_class_name(class_id)
+                event_processor.id_to_class[tracker_id] = class_name
 
-                    dx = x_end - x_start
-                    dy = y_end - y_start
-                    distance = np.sqrt(dx ** 2 + dy ** 2)
-                    time = len(coordinates[tracker_id]) / video_info.fps
-                    speed = distance / time  # meters per second
-
-                    class_id = int(detections.class_id[det_idx])
-                    class_name = detector_tracker.get_class_name(class_id)
-                    conf = float(detections.confidence[det_idx])
-
-                    # Update class mapping
-                    event_processor.id_to_class[tracker_id] = class_name
-
-                    # Save metrics
-                    csv_rows.append([
-                        frame_idx,
-                        int(tracker_id),
-                        class_name,
-                        conf,
-                        round(speed * 3.6, 2)
-                    ])
-
-                # Calculate TTC
+                # Calculate TTC using smoothed velocities
                 ttc_event = event_processor.calculate_ttc(
                     tracker_id,
                     kf_manager.get_all_states(),
@@ -324,7 +404,7 @@ def main():
                     ttc_labels[tracker_id] = [f"TTC->#{ttc_event['other_id']}:{ttc_event['t_star']:.1f}s"]
                     ttc_event_count += 1
 
-                # Predict future positions
+                # Predict future positions using smoothed velocity
                 future_positions = kf_manager.predict_future_positions(
                     tracker_id,
                     args.future_prediction_interval,
@@ -348,25 +428,43 @@ def main():
                 kf_manager.remove_tracker(tid)
                 future_coordinates.pop(tid, None)
                 last_seen_frame.pop(tid, None)
+                previous_detections.pop(tid, None)
 
-            # Generate labels
+            # Generate labels and save metrics using smoothed speeds
             labels = []
             for tracker_id in detections.tracker_id:
-                if len(coordinates[tracker_id]) < video_info.fps / 2:
-                    labels.append(f"#{tracker_id}")
-                else:
-                    (x_start, y_start) = coordinates[tracker_id][0]
-                    (x_end, y_end) = coordinates[tracker_id][-1]
-                    dx = x_end - x_start
-                    dy = y_end - y_start
-                    distance = np.sqrt(dx ** 2 + dy ** 2)
-                    time = len(coordinates[tracker_id]) / video_info.fps
-                    speed = distance / time
+                # Get smoothed speed for display
+                if tracker_id in kf_manager.get_all_states():
+                    vx_smooth, vy_smooth = kf_manager.get_smoothed_velocity(tracker_id)
+                    speed_ms = math.hypot(vx_smooth, vy_smooth)
 
-                    label = f"#{tracker_id} {int(speed * 3.6)} km/h"
+                    # Get confidence and class info
+                    det_idx = list(detections.tracker_id).index(tracker_id)
+                    class_id = int(detections.class_id[det_idx])
+                    class_name = detector_tracker.get_class_name(class_id)
+                    conf = float(detections.confidence[det_idx])
+
+                    # Only save metrics if speed is meaningful
+                    if speed_ms >= args.min_speed_threshold:
+                        csv_rows.append([
+                            frame_idx,
+                            int(tracker_id),
+                            class_name,
+                            conf,
+                            round(speed_ms * 3.6, 2)  # Convert to km/h
+                        ])
+
+                    # Create label
+                    if speed_ms < args.min_speed_threshold:
+                        label = f"#{tracker_id} 0 km/h"
+                    else:
+                        label = f"#{tracker_id} {int(speed_ms * 3.6)} km/h"
+
                     if tracker_id in ttc_labels:
                         label += " | " + ttc_labels[tracker_id][0]
                     labels.append(label)
+                else:
+                    labels.append(f"#{tracker_id}")
 
             # Draw segment lines if enabled
             if args.segment_speed:
