@@ -2,6 +2,8 @@
 
 A comprehensive computer vision system for real-time vehicle tracking, speed estimation, encroachment detection, and collision prediction using YOLO object detection and advanced tracking algorithms.
 
+![Version](https://img.shields.io/badge/version-v1.0.0-blue)
+
 ## Features
 
 - **Multi-Object Tracking**: Supports both StrongSORT and ByteTrack algorithms  
@@ -11,7 +13,12 @@ A comprehensive computer vision system for real-time vehicle tracking, speed est
 - **Kalman Filtering**: Smooth tracking and future position prediction  
 - **Zone Management**: Define and monitor custom polygonal zones  
 - **Segment-Based Speed**: Calibrated speed measurement between entry/exit lines  
-- **Visual Annotations**: Real-time visualization with tracks, speeds, and predictions  
+- **Visual Annotations**: Real-time visualization with tracks, speeds, and predictions
+- **Speed Calibration**: Apply linear, polynomial, or RANSAC models for speed correction
+- **Speed Stabilization**: Exponential smoothing, acceleration limits, and direction filtering
+
+
+
 
 ## Installation
 
@@ -191,6 +198,14 @@ project_root/
 - Processes video at ~30 FPS on NVIDIA GPU  
 - Supports multiple simultaneous tracked objects  
 - Real-time visualization with minimal overhead  
+
+## Version History
+
+- **v1.0.0** – Added speed calibration (linear, polynomial, RANSAC), speed smoothing (EMA), and physical stabilization (acceleration limits, direction filtering)
+- **v1.0.0** – Introduced Kalman Filter-based trajectory prediction and segment-based speed detection
+- **v1.0.0** – Initial release with YOLOv8 detection, ByteTrack integration, and encroachment zone logic
+
+➡ For full changelog, see [CHANGELOG.md](./CHANGELOG.md)
 
 ## Requirements
 
