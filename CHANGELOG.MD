@@ -36,3 +36,24 @@
 
 ---
 
+## [Unreleased] - 2025-06-02
+
+### Added
+- **Initial Velocity Estimation**: Implemented in `KalmanFilterManager` to calculate velocity based on the first 2 or 3 frames.
+- New configurable argument: `--initial_velocity_frames` (default: 2) to control initialization method.
+- New private method `_apply_initial_velocity()` to calculate and validate initial speed and direction.
+- Cleanup logic in `remove_tracker()` for new state variables.
+
+### Changed
+- `update_or_create()` now takes an extra `frame_idx` argument and applies initial velocity logic where applicable.
+- Minor update in `main.py` to supply `frame_idx` to Kalman filter calls.
+
+### Benefits
+- Enables **realistic speed display** from the 2nd or 3rd detection frame.
+- Enhances **robustness** to outliers with configurable speed validation.
+- Maintains **modular design** and aligns with velocity smoothing and acceleration constraints.
+
+### Notes
+- Future improvements may include adaptive frame count selection and confidence-weighted initialization.
+
+
