@@ -32,104 +32,159 @@ class AnnotationManager:
         # Color cache for future trajectories
         self.future_colors: Dict[int, Tuple[int, int, int]] = {}
 
-        # Counting line visualization state
-        self.counting_line_last_cross_time_sec = -float('inf')
-        self.counting_line_highlight_duration_sec = 0.5
-        self.counting_line_default_color = (255, 255, 0)  # cyan
-        self.counting_line_crossed_color = (0, 255, 255)  # yellow
+        # Double-line counting visualization state
+        self.line_a_last_cross_time_sec = -float('inf')
+        self.line_b_last_cross_time_sec = -float('inf')
+        self.line_highlight_duration_sec = 0.5
 
-    def signal_counting_line_cross(self, current_time_seconds: float) -> None:
-        """Signal that a vehicle has crossed the counting line.
+        # Line colors
+        self.line_a_default_color = (255, 0, 0)    # blue
+        self.line_a_crossed_color = (0, 255, 255)  # yellow
+        self.line_b_default_color = (0, 255, 0)    # green
+        self.line_b_crossed_color = (0, 255, 255)  # yellow
+
+    def signal_line_a_cross(self, current_time_seconds: float) -> None:
+        """Signal that a vehicle has crossed Line A.
 
         Args:
             current_time_seconds: Current time in seconds from video start
         """
-        self.counting_line_last_cross_time_sec = current_time_seconds
+        self.line_a_last_cross_time_sec = current_time_seconds
 
-    def draw_counting_line(self, frame: np.ndarray, line_coords: np.ndarray,
-                          current_time_seconds: float) -> np.ndarray:
-        """Draw the counting line with color change on recent crossing.
+    def signal_line_b_cross(self, current_time_seconds: float) -> None:
+        """Signal that a vehicle has crossed Line B.
+
+        Args:
+            current_time_seconds: Current time in seconds from video start
+        """
+        self.line_b_last_cross_time_sec = current_time_seconds
+
+    def draw_counting_lines(self, frame: np.ndarray,
+                           line_a_coords: Optional[np.ndarray],
+                           line_b_coords: Optional[np.ndarray],
+                           current_time_seconds: float) -> np.ndarray:
+        """Draw both counting lines with color changes on recent crossings.
 
         Args:
             frame: Current video frame
-            line_coords: Line coordinates as numpy array [[x1, y1], [x2, y2]]
+            line_a_coords: Line A coordinates as numpy array [[x1, y1], [x2, y2]]
+            line_b_coords: Line B coordinates as numpy array [[x1, y1], [x2, y2]]
             current_time_seconds: Current time in seconds from video start
 
         Returns:
-            Frame with counting line drawn
+            Frame with counting lines drawn
         """
-        if line_coords is None or len(line_coords) != 2:
-            return frame
+        # Draw Line A
+        if line_a_coords is not None and len(line_a_coords) == 2:
+            time_since_crossing_a = current_time_seconds - self.line_a_last_cross_time_sec
 
-        # Determine line color based on recent crossing
-        time_since_crossing = current_time_seconds - self.counting_line_last_cross_time_sec
+            if time_since_crossing_a < self.line_highlight_duration_sec:
+                line_a_color = self.line_a_crossed_color
+                line_a_thickness = self.thickness + 2
+            else:
+                line_a_color = self.line_a_default_color
+                line_a_thickness = self.thickness
 
-        if time_since_crossing < self.counting_line_highlight_duration_sec:
-            line_color = self.counting_line_crossed_color
-            line_thickness = self.thickness + 2
-        else:
-            line_color = self.counting_line_default_color
-            line_thickness = self.thickness
+            # Draw Line A
+            cv2.line(
+                frame,
+                tuple(line_a_coords[0].astype(int)),
+                tuple(line_a_coords[1].astype(int)),
+                line_a_color,
+                line_a_thickness,
+                lineType=cv2.LINE_AA
+            )
 
-        # Draw the counting line
-        cv2.line(
-            frame,
-            tuple(line_coords[0].astype(int)),
-            tuple(line_coords[1].astype(int)),
-            line_color,
-            line_thickness,
-            lineType=cv2.LINE_AA
-        )
+            # Add Line A label
+            midpoint_a = ((line_a_coords[0] + line_a_coords[1]) / 2).astype(int)
+            cv2.putText(
+                frame,
+                "LINE A",
+                (midpoint_a[0] - 30, midpoint_a[1] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                line_a_color,
+                2,
+                cv2.LINE_AA
+            )
 
-        # Add label
-        midpoint = ((line_coords[0] + line_coords[1]) / 2).astype(int)
-        cv2.putText(
-            frame,
-            "COUNTING LINE",
-            (midpoint[0] - 60, midpoint[1] - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            line_color,
-            2,
-            cv2.LINE_AA
-        )
+        # Draw Line B
+        if line_b_coords is not None and len(line_b_coords) == 2:
+            time_since_crossing_b = current_time_seconds - self.line_b_last_cross_time_sec
+
+            if time_since_crossing_b < self.line_highlight_duration_sec:
+                line_b_color = self.line_b_crossed_color
+                line_b_thickness = self.thickness + 2
+            else:
+                line_b_color = self.line_b_default_color
+                line_b_thickness = self.thickness
+
+            # Draw Line B
+            cv2.line(
+                frame,
+                tuple(line_b_coords[0].astype(int)),
+                tuple(line_b_coords[1].astype(int)),
+                line_b_color,
+                line_b_thickness,
+                lineType=cv2.LINE_AA
+            )
+
+            # Add Line B label
+            midpoint_b = ((line_b_coords[0] + line_b_coords[1]) / 2).astype(int)
+            cv2.putText(
+                frame,
+                "LINE B",
+                (midpoint_b[0] - 30, midpoint_b[1] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                line_b_color,
+                2,
+                cv2.LINE_AA
+            )
 
         return frame
 
-    def draw_live_vehicle_counts(self, frame: np.ndarray, incoming_count: int,
-                                outgoing_count: int) -> np.ndarray:
-        """Draw live vehicle counter on the video frame.
+    def draw_live_double_line_counts(self, frame: np.ndarray,
+                                   a_to_b_incoming: int, a_to_b_outgoing: int,
+                                   b_to_a_incoming: int, b_to_a_outgoing: int) -> np.ndarray:
+        """Draw live double-line vehicle counter on the video frame.
 
         Args:
             frame: Current video frame
-            incoming_count: Total incoming vehicle count
-            outgoing_count: Total outgoing vehicle count
+            a_to_b_incoming: A→B sequence incoming count
+            a_to_b_outgoing: A→B sequence outgoing count
+            b_to_a_incoming: B→A sequence incoming count
+            b_to_a_outgoing: B→A sequence outgoing count
 
         Returns:
             Frame with live counter display
         """
-        # Counter background
+        # Counter background (larger to accommodate more data)
         overlay = frame.copy()
-        cv2.rectangle(overlay, (10, 10), (350, 100), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (10, 10), (420, 140), (0, 0, 0), -1)
         frame = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
 
         # Counter text
         text_color = (255, 255, 255)
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 2
-        thickness = 3
+        font_scale = 0.6
+        thickness = 2
 
         # Title
-        cv2.putText(frame, "VEHICLE COUNTER", (20, 35),
-                   font, font_scale, text_color, thickness, cv2.LINE_AA)
+        cv2.putText(frame, "DOUBLE-LINE VEHICLE COUNTER", (20, 30),
+                   font, font_scale + 0.1, text_color, thickness, cv2.LINE_AA)
 
-        # Incoming count
-        cv2.putText(frame, f"Incoming: {incoming_count}", (20, 70),
-                   font, font_scale - 0.1, (0, 255, 0), thickness, cv2.LINE_AA)
+        # A→B sequence counts
+        cv2.putText(frame, f"A->B Incoming: {a_to_b_incoming}", (20, 55),
+                   font, font_scale, (0, 255, 0), thickness, cv2.LINE_AA)
+        cv2.putText(frame, f"A->B Outgoing: {a_to_b_outgoing}", (20, 75),
+                   font, font_scale, (0, 0, 255), thickness, cv2.LINE_AA)
 
-        # Outgoing count
-        cv2.putText(frame, f"Outgoing: {outgoing_count}", (20, 105),
-                   font, font_scale - 0.1, (0, 0, 255), thickness, cv2.LINE_AA)
+        # B→A sequence counts
+        cv2.putText(frame, f"B->A Incoming: {b_to_a_incoming}", (20, 100),
+                   font, font_scale, (0, 255, 0), thickness, cv2.LINE_AA)
+        cv2.putText(frame, f"B->A Outgoing: {b_to_a_outgoing}", (20, 120),
+                   font, font_scale, (0, 0, 255), thickness, cv2.LINE_AA)
 
         return frame
 

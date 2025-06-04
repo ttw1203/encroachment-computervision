@@ -37,8 +37,12 @@ class Config:
         # Zone configuration
         self.ENC_ZONE_CONFIG = os.getenv("ENC_ZONE_CONFIG")
 
-        # Load counting line coordinates
-        self.COUNTING_LINE_COORDS = self.load_counting_line(self.ENC_ZONE_CONFIG)
+        # Advanced vehicle counting configuration
+        self.ENABLE_ADVANCED_VEHICLE_COUNTING = os.getenv("ENABLE_ADVANCED_VEHICLE_COUNTING", "False").lower() == "true"
+
+        # Load counting line coordinates (A and B)
+        self.COUNTING_LINE_A_COORDS = self.load_counting_line_coords(self.ENC_ZONE_CONFIG, "counting_line_a")
+        self.COUNTING_LINE_B_COORDS = self.load_counting_line_coords(self.ENC_ZONE_CONFIG, "counting_line_b")
 
         # Speed calibration configuration
         self.SPEED_CALIBRATION_MODEL_TYPE = os.getenv("SPEED_CALIBRATION_MODEL_TYPE", "linear")
@@ -75,12 +79,16 @@ class Config:
         self.COLLISION_DISTANCE = 2.0  # meters
 
     @staticmethod
-    def load_counting_line(path: str) -> Optional[np.ndarray]:
+    def load_counting_line_coords(path: str, line_key: str) -> Optional[np.ndarray]:
         """Load counting line coordinates from YAML or JSON file.
+
+        Args:
+            path: Path to the configuration file
+            line_key: Key name for the line (e.g., 'counting_line_a', 'counting_line_b')
 
         Returns:
             NumPy array of shape (2, 2) with line endpoints [[x1, y1], [x2, y2]]
-            or None if counting_line is not defined in the configuration file.
+            or None if the line is not defined in the configuration file.
         """
         if not path or not os.path.exists(path):
             return None
@@ -90,19 +98,19 @@ class Config:
             with open(path, "r") as f:
                 data = yaml.safe_load(f) if ext in {".yml", ".yaml"} else json.load(f)
 
-            if "counting_line" not in data:
+            if line_key not in data:
                 return None
 
-            counting_line = np.asarray(data["counting_line"], dtype=np.int32)
+            counting_line = np.asarray(data[line_key], dtype=np.int32)
 
             # Validate shape
             if counting_line.shape != (2, 2):
-                raise ValueError(f"counting_line must have shape (2, 2), got {counting_line.shape}")
+                raise ValueError(f"{line_key} must have shape (2, 2), got {counting_line.shape}")
 
             return counting_line
 
         except Exception as e:
-            print(f"Warning: Failed to load counting_line from {path}: {e}")
+            print(f"Warning: Failed to load {line_key} from {path}: {e}")
             return None
 
     def get_rf_detr_config(self) -> Dict[str, Any]:

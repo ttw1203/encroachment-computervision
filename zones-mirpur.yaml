@@ -13,8 +13,16 @@ right_zone:
 
 # Vehicle counting line (pixel coordinates)
 counting_line:
+
+
+# Double-line vehicle counting system
+counting_line_a:
   - [912, 1170]
   - [3066, 1122]
+
+counting_line_b:
+  - [100, 1800]
+  - [3790, 1635]
 
 # Segment lines
 segment_entry: [[1977, 1137], [2800, 1152]]   # upstream line

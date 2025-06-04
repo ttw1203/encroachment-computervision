@@ -32,11 +32,11 @@ class IOManager:
         df.to_csv(csv_file, index=False)
         return csv_file
 
-    def save_vehicle_counts(self, processed_counts_list: List[Dict]) -> Path:
-        """Save vehicle counting results to CSV.
+    def save_double_line_vehicle_counts(self, processed_counts_list: List[Dict]) -> Path:
+        """Save double-line vehicle counting results to CSV.
 
         Args:
-            processed_counts_list: List of dictionaries with vehicle counting data
+            processed_counts_list: List of dictionaries with double-line counting data
 
         Returns:
             Path to saved CSV file
@@ -46,25 +46,29 @@ class IOManager:
         # Ensure all required columns exist
         required_columns = [
             'vehicle_class',
-            'total_incoming',
-            'total_outgoing',
-            'avg_speed_incoming_kmh',
-            'avg_speed_outgoing_kmh'
+            'a_to_b_incoming',
+            'a_to_b_outgoing',
+            'b_to_a_incoming',
+            'b_to_a_outgoing',
+            'avg_speed_a_to_b_incoming_kmh',
+            'avg_speed_a_to_b_outgoing_kmh',
+            'avg_speed_b_to_a_incoming_kmh',
+            'avg_speed_b_to_a_outgoing_kmh'
         ]
 
         for col in required_columns:
             if col not in df.columns:
-                if 'total' in col:
-                    df[col] = 0
-                elif 'avg_speed' in col:
+                if 'avg_speed' in col:
                     df[col] = 0.0
+                else:
+                    df[col] = 0
 
         # Reorder columns
         df = df[required_columns]
 
-        csv_file = self.output_dir / f"vehicle_counts_{self.timestamp}.csv"
+        csv_file = self.output_dir / f"double_line_vehicle_counts_{self.timestamp}.csv"
         df.to_csv(csv_file, index=False)
-        print(f"[IOManager] Vehicle counts saved to: {csv_file}")
+        print(f"[IOManager] Double-line vehicle counts saved to: {csv_file}")
         return csv_file
 
     def save_ttc_events(self, ttc_rows: List[List]) -> Path:
