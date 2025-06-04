@@ -618,7 +618,7 @@ def main():
     if advanced_counting_enabled:
         double_line_counter = DoubleLineVehicleCounter(
             video_fps=video_info.fps,
-            time_window_seconds=30.0
+            passage_timeout_seconds=30.0
         )
 
     # State variables
@@ -875,15 +875,11 @@ def main():
                 frame, detections, labels, future_coordinates, active_ids
             )
 
-            # Draw live double-line vehicle counter if advanced counting enabled
+            # Draw live vehicle counter if advanced counting enabled
             if advanced_counting_enabled:
                 totals = double_line_counter.get_total_counts()
-                annotated_frame = annotation_manager.draw_live_double_line_counts(
-                    annotated_frame,
-                    totals["a_to_b_incoming"],
-                    totals["a_to_b_outgoing"],
-                    totals["b_to_a_incoming"],
-                    totals["b_to_a_outgoing"]
+                annotated_frame = annotation_manager.draw_live_vehicle_counts(
+                    annotated_frame, totals["incoming"], totals["outgoing"]
                 )
 
             # Write frame
@@ -914,12 +910,16 @@ def main():
     # Save double-line vehicle counting results if enabled
     if advanced_counting_enabled:
         processed_counts = double_line_counter.get_processed_counts_for_export()
-        io_manager.save_double_line_vehicle_counts(processed_counts)
+        # Check if we should use save_vehicle_counts or save_double_line_vehicle_counts
+        if hasattr(io_manager, 'save_double_line_vehicle_counts'):
+            io_manager.save_double_line_vehicle_counts(processed_counts)
+        else:
+            # Fallback to save_vehicle_counts method
+            io_manager.save_vehicle_counts(processed_counts)
 
         totals = double_line_counter.get_total_counts()
         print(f"Double-line counting results saved:")
-        print(f"  A→B: {totals['a_to_b_incoming']} incoming, {totals['a_to_b_outgoing']} outgoing")
-        print(f"  B→A: {totals['b_to_a_incoming']} incoming, {totals['b_to_a_outgoing']} outgoing")
+        print(f"  Total: {totals['incoming']} incoming, {totals['outgoing']} outgoing")
 
     # Print summary
     elapsed = tm.time() - t0
