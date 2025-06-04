@@ -1,5 +1,7 @@
 """Object detection and tracking functionality."""
-from typing import Optional, Dict, Tuple
+import json
+import cv2
+from typing import Optional, Dict, Tuple, Any
 import numpy as np
 from pathlib import Path
 from ultralytics import YOLO
@@ -11,14 +13,20 @@ class DetectionTracker:
     """Manages object detection and tracking."""
 
     def __init__(self, model_weights: str, device: str, tracker_type: str = "strongsort",
-                 confidence_threshold: float = 0.3, video_fps: float = 30.0):
+                 confidence_threshold: float = 0.3, video_fps: float = 30.0,
+                 detector_model: str = "yolo", rf_detr_config: Optional[Dict[str, Any]] = None):
         """Initialize detection and tracking components."""
-        self.model = YOLO(model_weights)
-        self.model.to(device)
+        self.detector_model = detector_model
         self.device = device
         self.tracker_type = tracker_type
         self.confidence_threshold = confidence_threshold
         self.video_fps = video_fps
+
+        # Initialize detection model
+        if detector_model == "rf_detr":
+            self._init_rf_detr(rf_detr_config)
+        else:  # Default to YOLO
+            self._init_yolo(model_weights)
 
         # Initialize tracker
         if tracker_type == "strongsort":
@@ -34,16 +42,82 @@ class DetectionTracker:
                 track_activation_threshold=confidence_threshold,
             )
 
+    def _init_yolo(self, model_weights: str):
+        """Initialize YOLO model."""
+        self.model = YOLO(model_weights)
+        self.model.to(self.device)
+        self.class_map = None  # YOLO uses built-in names
+
+    def _init_rf_detr(self, rf_detr_config: Dict[str, Any]):
+        """Initialize RF-DETR model."""
+        try:
+            # Import RF-DETR
+            if rf_detr_config['variant'] == 'large':
+                from rfdetr import RFDETRLarge
+                ModelClass = RFDETRLarge
+            else:
+                from rfdetr import RFDETRBase
+                ModelClass = RFDETRBase
+
+            # Initialize model with custom checkpoint if provided
+            if rf_detr_config.get('model_path'):
+                print(f"[RF-DETR] Loading custom model: {rf_detr_config['model_path']}")
+                self.model = ModelClass(
+                    pretrain_weights=rf_detr_config['model_path'],
+                    resolution=rf_detr_config['resolution']
+                )
+            else:
+                print(f"[RF-DETR] Loading pre-trained {rf_detr_config['variant']} model")
+                self.model = ModelClass(resolution=rf_detr_config['resolution'])
+
+            # Load class mapping
+            if rf_detr_config['model_type'] == 'custom':
+                print(f"[RF-DETR] Loading custom classes: {rf_detr_config['classes_path']}")
+                self.class_map = self._load_custom_classes(rf_detr_config['classes_path'])
+                print(f"[RF-DETR] Loaded {len(self.class_map)} custom classes")
+            else:
+                # Use COCO classes
+                from rfdetr.util.coco_classes import COCO_CLASSES
+                self.class_map = {str(i): name for i, name in enumerate(COCO_CLASSES)}
+                print(f"[RF-DETR] Using COCO classes ({len(COCO_CLASSES)} classes)")
+
+            print(f"[RF-DETR] Model initialized successfully with resolution {rf_detr_config['resolution']}")
+
+        except ImportError as e:
+            raise ImportError(f"Failed to import RF-DETR. Please install with: pip install rfdetr>=1.0.0. Error: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize RF-DETR model: {e}")
+
+    def _load_custom_classes(self, classes_path: str) -> Dict[str, str]:
+        """Load custom class mapping from JSON file."""
+        try:
+            with open(classes_path, 'r') as f:
+                class_map = json.load(f)
+
+            # Validate format and convert keys to strings
+            if not isinstance(class_map, dict):
+                raise ValueError("Custom classes file must contain a JSON object")
+
+            validated_map = {}
+            for k, v in class_map.items():
+                validated_map[str(k)] = str(v)
+
+            return validated_map
+
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in custom classes file: {e}")
+        except Exception as e:
+            raise ValueError(f"Error loading custom classes file: {e}")
+
     def detect_and_track(self, frame: np.ndarray,
                          polygon_zone: Optional[sv.PolygonZone] = None,
                          iou_threshold: float = 0.7) -> sv.Detections:
         """Run detection and tracking on a frame."""
-        # Run detection
-        result = self.model(frame)[0]
-        detections = sv.Detections.from_ultralytics(result)
-
-        # Filter by confidence
-        detections = detections[detections.confidence > self.confidence_threshold]
+        # Run detection based on selected model
+        if self.detector_model == "rf_detr":
+            detections = self._detect_rf_detr(frame)
+        else:  # YOLO
+            detections = self._detect_yolo(frame)
 
         # Apply polygon zone filter if provided
         if polygon_zone:
@@ -77,9 +151,47 @@ class DetectionTracker:
 
         return detections
 
+    def _detect_yolo(self, frame: np.ndarray) -> sv.Detections:
+        """Run YOLO detection on frame."""
+        result = self.model(frame)[0]
+        detections = sv.Detections.from_ultralytics(result)
+
+        # Filter by confidence
+        detections = detections[detections.confidence > self.confidence_threshold]
+
+        return detections
+
+    def _detect_rf_detr(self, frame: np.ndarray) -> sv.Detections:
+        """Run RF-DETR detection on frame."""
+        try:
+            # RF-DETR expects RGB format, OpenCV provides BGR
+            # Convert BGR to RGB for RF-DETR
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # RF-DETR predict method directly returns supervision.Detections
+            # and handles confidence filtering internally via threshold parameter
+            detections = self.model.predict(frame_rgb, threshold=self.confidence_threshold)
+
+            return detections
+
+        except Exception as e:
+            print(f"[RF-DETR] Detection error: {e}")
+            # Return empty detections on error
+            return sv.Detections(
+                xyxy=np.empty((0, 4), dtype=float),
+                confidence=np.empty(0, dtype=float),
+                class_id=np.empty(0, dtype=int),
+            )
+
     def get_class_name(self, class_id: int) -> str:
         """Get class name for a given class ID."""
-        return self.model.names[class_id]
+        if self.detector_model == "rf_detr":
+            if self.class_map:
+                return self.class_map.get(str(class_id), f"unknown_{class_id}")
+            else:
+                return f"class_{class_id}"
+        else:  # YOLO
+            return self.model.names.get(class_id, f"unknown_{class_id}")
 
 
 def sv_to_boxmot(det: sv.Detections) -> np.ndarray:
