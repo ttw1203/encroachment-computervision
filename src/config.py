@@ -27,6 +27,13 @@ class Config:
         self.MODEL_WEIGHTS = os.getenv("MODEL_WEIGHTS", "yolov8l.pt")
         self.DEVICE = os.getenv("DEVICE", "cpu")
 
+        # RF-DETR Configuration
+        self.RF_DETR_MODEL_PATH = os.getenv("RF_DETR_MODEL_PATH")
+        self.RF_DETR_MODEL_TYPE = os.getenv("RF_DETR_MODEL_TYPE", "coco")  # 'custom' or 'coco'
+        self.RF_DETR_CUSTOM_CLASSES_PATH = os.getenv("RF_DETR_CUSTOM_CLASSES_PATH")
+        self.RF_DETR_RESOLUTION = int(os.getenv("RF_DETR_RESOLUTION", "560"))
+        self.RF_DETR_VARIANT = os.getenv("RF_DETR_VARIANT", "base")  # 'base' or 'large'
+
         # Zone configuration
         self.ENC_ZONE_CONFIG = os.getenv("ENC_ZONE_CONFIG")
 
@@ -48,6 +55,67 @@ class Config:
 
         # TTC parameters
         self.COLLISION_DISTANCE = 2.0  # meters
+
+    def get_rf_detr_config(self) -> Dict[str, Any]:
+        """Get RF-DETR configuration dictionary."""
+        config = {
+            'model_path': self.RF_DETR_MODEL_PATH,
+            'model_type': self.RF_DETR_MODEL_TYPE,
+            'resolution': self.RF_DETR_RESOLUTION,
+            'variant': self.RF_DETR_VARIANT
+        }
+
+        # Add custom classes path if using custom model
+        if self.RF_DETR_MODEL_TYPE == 'custom':
+            config['classes_path'] = self.RF_DETR_CUSTOM_CLASSES_PATH
+
+        return config
+
+    def validate_rf_detr_config(self) -> bool:
+        """Validate RF-DETR configuration."""
+        # Check resolution is divisible by 56
+        if self.RF_DETR_RESOLUTION % 56 != 0:
+            raise ValueError(f"RF-DETR resolution ({self.RF_DETR_RESOLUTION}) must be divisible by 56")
+
+        # Check variant is valid
+        if self.RF_DETR_VARIANT not in ['base', 'large']:
+            raise ValueError(f"RF-DETR variant must be 'base' or 'large', got: {self.RF_DETR_VARIANT}")
+
+        # Check custom model configuration
+        if self.RF_DETR_MODEL_TYPE == 'custom':
+            if not self.RF_DETR_MODEL_PATH:
+                raise ValueError("RF_DETR_MODEL_PATH must be specified for custom models")
+
+            if not self.RF_DETR_CUSTOM_CLASSES_PATH:
+                raise ValueError("RF_DETR_CUSTOM_CLASSES_PATH must be specified for custom models")
+
+            # Check if files exist
+            if not os.path.exists(self.RF_DETR_MODEL_PATH):
+                raise FileNotFoundError(f"RF-DETR model not found: {self.RF_DETR_MODEL_PATH}")
+
+            if not os.path.exists(self.RF_DETR_CUSTOM_CLASSES_PATH):
+                raise FileNotFoundError(f"RF-DETR classes file not found: {self.RF_DETR_CUSTOM_CLASSES_PATH}")
+
+        return True
+
+    @staticmethod
+    def load_rf_detr_custom_classes(classes_path: str) -> Dict[str, str]:
+        """Load custom class mapping from JSON file."""
+        try:
+            with open(classes_path, 'r') as f:
+                class_map = json.load(f)
+
+            # Validate format - should be {id: name} mapping
+            if not isinstance(class_map, dict):
+                raise ValueError("Custom classes file must contain a JSON object")
+
+            # Convert all keys to strings for consistency
+            return {str(k): str(v) for k, v in class_map.items()}
+
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in custom classes file: {e}")
+        except Exception as e:
+            raise ValueError(f"Error loading custom classes file: {e}")
 
     @staticmethod
     def load_zones(path: str) -> Tuple[np.ndarray, np.ndarray]:
