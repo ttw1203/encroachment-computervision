@@ -50,13 +50,13 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--confidence_threshold",
-        default=0.3,
+        default=0.6,
         help="Confidence threshold for the model",
         type=float,
     )
     parser.add_argument(
         "--iou_threshold",
-        default=0.7,
+        default=0.4,
         help="IOU threshold for the model",
         type=float
     )
@@ -133,7 +133,7 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def validate_detection_consistency(detections: sv.Detections, previous_detections: dict[int, np.ndarray],
-                                 max_pixel_jump: float = 100.0) -> sv.Detections:
+                                 max_pixel_jump: float = 300.0) -> sv.Detections:
     """Validate detections to prevent ID switches and large position jumps."""
     if len(detections) == 0:
         return detections

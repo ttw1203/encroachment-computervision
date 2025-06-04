@@ -52,7 +52,7 @@ class Config:
         self.DISPLAY = False
 
         # Encroachment parameters
-        self.ENCROACH_SECS = 1.0
+        self.ENCROACH_SECS = 30
         self.MOVE_THRESH_METRES = 1.0
 
         # Future prediction defaults
@@ -61,7 +61,7 @@ class Config:
         self.DEFAULT_TTC_THRESHOLD = 1.0
 
         # Tracking parameters
-        self.MAX_AGE_SECONDS = 1.0
+        self.MAX_AGE_SECONDS = 3.0
 
         # TTC parameters
         self.COLLISION_DISTANCE = 2.0  # meters

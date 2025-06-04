@@ -13,7 +13,7 @@ class DetectionTracker:
     """Manages object detection and tracking."""
 
     def __init__(self, model_weights: str, device: str, tracker_type: str = "strongsort",
-                 confidence_threshold: float = 0.3, video_fps: float = 30.0,
+                 confidence_threshold: float = 0.6, video_fps: float = 30.0,
                  detector_model: str = "yolo", rf_detr_config: Optional[Dict[str, Any]] = None):
         """Initialize detection and tracking components."""
         self.detector_model = detector_model
@@ -40,6 +40,8 @@ class DetectionTracker:
             self.tracker = sv.ByteTrack(
                 frame_rate=video_fps,
                 track_activation_threshold=confidence_threshold,
+                lost_track_buffer=300,
+                minimum_matching_threshold=confidence_threshold
             )
 
     def _init_yolo(self, model_weights: str):
@@ -111,7 +113,7 @@ class DetectionTracker:
 
     def detect_and_track(self, frame: np.ndarray,
                          polygon_zone: Optional[sv.PolygonZone] = None,
-                         iou_threshold: float = 0.7) -> sv.Detections:
+                         iou_threshold: float = 0.4) -> sv.Detections:
         """Run detection and tracking on a frame."""
         # Run detection based on selected model
         if self.detector_model == "rf_detr":
