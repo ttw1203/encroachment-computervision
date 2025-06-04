@@ -35,6 +35,13 @@ def parse_arguments() -> argparse.Namespace:
         help="Disable the translucent curb-lane overlays drawn by blend_zone()"
     )
     parser.add_argument(
+        "--initial_velocity_frames",
+        default=2,
+        type=int,
+        choices=[2, 3],
+        help="Number of frames to use for initial velocity calculation (default: 2)"
+    )
+    parser.add_argument(
         "--source_video_path",
         required=False,
         help="Path to the source video file",
@@ -263,7 +270,8 @@ def main():
     kf_manager = KalmanFilterManager(
         speed_smoothing_window=args.speed_smoothing_window,
         max_acceleration=args.max_acceleration,
-        min_speed_threshold=args.min_speed_threshold
+        min_speed_threshold=args.min_speed_threshold,
+        initial_velocity_frames=args.initial_velocity_frames
     )
 
     # Zone management
@@ -335,7 +343,7 @@ def main():
             )
 
             # Filter riders if needed
-            # detections = filter_rider_persons(detections, iou_thr=0.50)
+            detections = filter_rider_persons(detections, iou_thr=0.30)
 
             # Validate detection consistency
             detections = validate_detection_consistency(detections, previous_detections)
@@ -374,7 +382,7 @@ def main():
             for det_idx, (tracker_id, [x, y]) in enumerate(zip(detections.tracker_id, points)):
                 # Update Kalman filter
                 dt = 1 / video_info.fps
-                kf = kf_manager.update_or_create(tracker_id, x, y, dt)
+                kf = kf_manager.update_or_create(tracker_id, x, y, dt, frame_idx)
 
                 # Apply speed calibration with stability
                 kf_manager.apply_speed_calibration(tracker_id, calibration_func)

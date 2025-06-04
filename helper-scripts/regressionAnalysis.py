@@ -285,7 +285,7 @@ if __name__ == "__main__":
     # df_test.to_csv('speed_data.csv', index=False)
 
     # Initialize analyzer (passing None for csv_file_path as we provide data directly)
-    analyzer = SpeedRegressionAnalyzer(csv_file_path='speed_data.csv', predicted_col='predicted_speeds',ground_truth_col='ground_truth_speeds')
+    analyzer = SpeedRegressionAnalyzer(csv_file_path='../speed_data.csv', predicted_col='predicted_speeds', ground_truth_col='ground_truth_speeds')
 
     # Run complete analysis using provided lists
     print("SPEED REGRESSION ANALYSIS")
