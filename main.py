@@ -98,6 +98,11 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Enable segment-based speed calibration (default: off)"
     )
+    parser.add_argument(
+        "--display_basic_info",
+        action="store_true",
+        help="Display basic info (ID, Class, Confidence) instead of speed/TTC"
+    )
 
     return parser.parse_args()
 
@@ -348,25 +353,35 @@ def main():
                 kf_manager.remove_tracker(tid)
                 future_coordinates.pop(tid, None)
                 last_seen_frame.pop(tid, None)
-
-            # Generate labels
+                # Generate labels
             labels = []
-            for tracker_id in detections.tracker_id:
-                if len(coordinates[tracker_id]) < video_info.fps / 2:
-                    labels.append(f"#{tracker_id}")
-                else:
-                    (x_start, y_start) = coordinates[tracker_id][0]
-                    (x_end, y_end) = coordinates[tracker_id][-1]
-                    dx = x_end - x_start
-                    dy = y_end - y_start
-                    distance = np.sqrt(dx ** 2 + dy ** 2)
-                    time = len(coordinates[tracker_id]) / video_info.fps
-                    speed = distance / time
-
-                    label = f"#{tracker_id} {int(speed * 3.6)} km/h"
-                    if tracker_id in ttc_labels:
-                        label += " | " + ttc_labels[tracker_id][0]
+            if args.display_basic_info:
+                # New logic for basic info display
+                for det_idx, tracker_id in enumerate(detections.tracker_id):
+                    class_id = int(detections.class_id[det_idx])
+                    class_name = detector_tracker.get_class_name(class_id)
+                    confidence = float(detections.confidence[det_idx])
+                    label = f"ID:{tracker_id} {class_name} ({confidence:.2f})"
                     labels.append(label)
+            else:
+                # Original label generation logic for speed and TTC
+                for tracker_id in detections.tracker_id:
+                    if len(coordinates[tracker_id]) < video_info.fps / 2:
+                        labels.append(f"#{tracker_id}")
+                    else:
+                        (x_start, y_start) = coordinates[tracker_id][0]
+                        (x_end, y_end) = coordinates[tracker_id][-1]
+                        dx = x_end - x_start
+                        dy = y_end - y_start
+                        distance = np.sqrt(dx ** 2 + dy ** 2)
+                        time = len(coordinates[tracker_id]) / video_info.fps
+                        speed = distance / time
+
+                        label = f"#{tracker_id} {int(speed * 3.6)} km/h"
+                        if tracker_id in ttc_labels:
+                            label += " | " + ttc_labels[tracker_id][0]
+                        labels.append(label)
+
 
             # Draw segment lines if enabled
             if args.segment_speed:
