@@ -24,32 +24,36 @@ from src.io_utils import IOManager
 
 @dataclass
 class VehicleState:
-    """Tracks the state of a vehicle in the double-line counting system."""
+    """Tracks the state of a vehicle in the single-passage counting system."""
     tracker_id: int
     class_name: str
-    line_a_cross_time: Optional[float] = None
-    line_b_cross_time: Optional[float] = None
-    line_a_cross_direction: Optional[str] = None
-    line_b_cross_direction: Optional[str] = None
+    line_a_crossed: bool = False
+    line_b_crossed: bool = False
+    counted_this_passage: bool = False
     last_position: Optional[tuple] = None
+    first_cross_time: Optional[float] = None
+    first_cross_direction: Optional[str] = None
+    first_cross_line: Optional[str] = None  # 'A' or 'B'
 
-    def reset(self):
-        """Reset the vehicle state for re-counting."""
-        self.line_a_cross_time = None
-        self.line_b_cross_time = None
-        self.line_a_cross_direction = None
-        self.line_b_cross_direction = None
+    def reset_for_new_passage(self):
+        """Reset the vehicle state for a new passage."""
+        self.line_a_crossed = False
+        self.line_b_crossed = False
+        self.counted_this_passage = False
+        self.first_cross_time = None
+        self.first_cross_direction = None
+        self.first_cross_line = None
 
 
 class DoubleLineVehicleCounter:
-    """Manages double-line vehicle counting with A→B and B→A sequences."""
+    """Manages single-passage vehicle counting across two lines."""
 
     def __init__(self, video_fps: float, time_window_seconds: float = 30.0):
-        """Initialize the double-line counter.
+        """Initialize the single-passage counter.
 
         Args:
             video_fps: Video frame rate
-            time_window_seconds: Maximum time allowed between line crossings
+            time_window_seconds: Maximum time allowed for a vehicle to be considered in the same passage
         """
         self.video_fps = video_fps
         self.time_window_seconds = time_window_seconds
@@ -57,19 +61,12 @@ class DoubleLineVehicleCounter:
         # Vehicle state tracking
         self.vehicle_states: Dict[int, VehicleState] = {}
 
-        # Counting results by direction sequence and vehicle class
-        self.count_data = {
-            "a_to_b": defaultdict(lambda: {
-                "incoming": 0, "outgoing": 0,
-                "total_speed_incoming": 0.0, "count_for_speed_incoming": 0,
-                "total_speed_outgoing": 0.0, "count_for_speed_outgoing": 0
-            }),
-            "b_to_a": defaultdict(lambda: {
-                "incoming": 0, "outgoing": 0,
-                "total_speed_incoming": 0.0, "count_for_speed_incoming": 0,
-                "total_speed_outgoing": 0.0, "count_for_speed_outgoing": 0
-            })
-        }
+        # Simplified counting results by vehicle class and direction
+        self.count_data = defaultdict(lambda: {
+            "incoming": 0, "outgoing": 0,
+            "total_speed_incoming": 0.0, "count_for_speed_incoming": 0,
+            "total_speed_outgoing": 0.0, "count_for_speed_outgoing": 0
+        })
 
         # Visual feedback tracking
         self.line_a_last_cross_time = -float('inf')
@@ -79,7 +76,7 @@ class DoubleLineVehicleCounter:
                                current_position: tuple, current_time: float,
                                line_a_coords: np.ndarray, line_b_coords: np.ndarray,
                                current_speed: float, min_speed_threshold: float) -> bool:
-        """Update vehicle position and check for line crossings.
+        """Update vehicle position and check for line crossings with single-passage counting.
 
         Args:
             tracker_id: Vehicle tracker ID
@@ -102,38 +99,67 @@ class DoubleLineVehicleCounter:
         vehicle_state.class_name = class_name  # Update in case it changed
 
         # Initialize crossing flag
-        crossing_occurred = False
+        counting_occurred = False
 
         # Check for line crossings if we have a previous position
         if vehicle_state.last_position is not None:
             # Check Line A crossing
-            if self._check_line_crossing(vehicle_state.last_position, current_position, line_a_coords):
+            if not vehicle_state.line_a_crossed and self._check_line_crossing(
+                vehicle_state.last_position, current_position, line_a_coords):
+
                 direction = self._get_crossing_direction(vehicle_state.last_position, current_position)
                 if direction:
-                    vehicle_state.line_a_cross_time = current_time
-                    vehicle_state.line_a_cross_direction = direction
+                    vehicle_state.line_a_crossed = True
                     self.line_a_last_cross_time = current_time
-                    crossing_occurred = True
-                    print(f"[DOUBLE-LINE] Vehicle {tracker_id} ({class_name}) crossed Line A: {direction}")
+
+                    print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} ({class_name}) crossed Line A: {direction}")
+
+                    # Count vehicle if not already counted in this passage
+                    if not vehicle_state.counted_this_passage:
+                        self._count_vehicle(vehicle_state, direction, current_speed, min_speed_threshold, current_time, 'A')
+                        counting_occurred = True
 
             # Check Line B crossing
-            if self._check_line_crossing(vehicle_state.last_position, current_position, line_b_coords):
+            if not vehicle_state.line_b_crossed and self._check_line_crossing(
+                vehicle_state.last_position, current_position, line_b_coords):
+
                 direction = self._get_crossing_direction(vehicle_state.last_position, current_position)
                 if direction:
-                    vehicle_state.line_b_cross_time = current_time
-                    vehicle_state.line_b_cross_direction = direction
+                    vehicle_state.line_b_crossed = True
                     self.line_b_last_cross_time = current_time
-                    crossing_occurred = True
-                    print(f"[DOUBLE-LINE] Vehicle {tracker_id} ({class_name}) crossed Line B: {direction}")
 
-            # Check for completed sequences
-            if self._check_completed_sequences(vehicle_state, current_time, current_speed, min_speed_threshold):
-                crossing_occurred = True
+                    print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} ({class_name}) crossed Line B: {direction}")
+
+                    # Count vehicle if not already counted in this passage
+                    if not vehicle_state.counted_this_passage:
+                        self._count_vehicle(vehicle_state, direction, current_speed, min_speed_threshold, current_time, 'B')
+                        counting_occurred = True
 
         # Update position for next frame
         vehicle_state.last_position = current_position
 
-        return crossing_occurred
+        return counting_occurred
+
+    def _count_vehicle(self, vehicle_state: VehicleState, direction: str,
+                      current_speed: float, min_speed_threshold: float,
+                      current_time: float, line_crossed: str):
+        """Count the vehicle and update statistics."""
+        vehicle_state.counted_this_passage = True
+        vehicle_state.first_cross_time = current_time
+        vehicle_state.first_cross_direction = direction
+        vehicle_state.first_cross_line = line_crossed
+
+        # Update count
+        self.count_data[vehicle_state.class_name][direction] += 1
+
+        # Update speed tracking if vehicle has meaningful speed
+        if current_speed >= min_speed_threshold:
+            speed_kmh = current_speed * 3.6
+            self.count_data[vehicle_state.class_name][f'total_speed_{direction}'] += speed_kmh
+            self.count_data[vehicle_state.class_name][f'count_for_speed_{direction}'] += 1
+
+        print(f"[SINGLE-PASSAGE] Vehicle {vehicle_state.tracker_id} ({vehicle_state.class_name}) "
+              f"COUNTED: {direction} (first crossed Line {line_crossed})")
 
     def _check_line_crossing(self, prev_pos: tuple, curr_pos: tuple, line_coords: np.ndarray) -> bool:
         """Check if vehicle crossed a line using change of side method."""
@@ -155,89 +181,34 @@ class DoubleLineVehicleCounter:
             return "outgoing"  # Moving up (y decreases)
         return None
 
-    def _check_completed_sequences(self, vehicle_state: VehicleState, current_time: float,
-                                  current_speed: float, min_speed_threshold: float) -> bool:
-        """Check for completed A→B or B→A sequences and update counts."""
-        if (vehicle_state.line_a_cross_time is None or
-            vehicle_state.line_b_cross_time is None):
-            return False
-
-        time_diff = abs(vehicle_state.line_a_cross_time - vehicle_state.line_b_cross_time)
-
-        # Check if crossings are within time window
-        if time_diff > self.time_window_seconds:
-            return False
-
-        sequence_type = None
-        direction = None
-
-        # Determine sequence type and direction
-        if (vehicle_state.line_a_cross_time < vehicle_state.line_b_cross_time and
-            vehicle_state.line_a_cross_direction == vehicle_state.line_b_cross_direction):
-            # A→B sequence
-            sequence_type = "a_to_b"
-            direction = vehicle_state.line_a_cross_direction
-
-        elif (vehicle_state.line_b_cross_time < vehicle_state.line_a_cross_time and
-              vehicle_state.line_a_cross_direction == vehicle_state.line_b_cross_direction):
-            # B→A sequence
-            sequence_type = "b_to_a"
-            direction = vehicle_state.line_b_cross_direction
-
-        if sequence_type and direction:
-            # Update count
-            self.count_data[sequence_type][vehicle_state.class_name][direction] += 1
-
-            # Update speed tracking if vehicle has meaningful speed
-            if current_speed >= min_speed_threshold:
-                speed_kmh = current_speed * 3.6
-                self.count_data[sequence_type][vehicle_state.class_name][f'total_speed_{direction}'] += speed_kmh
-                self.count_data[sequence_type][vehicle_state.class_name][f'count_for_speed_{direction}'] += 1
-
-            print(f"[DOUBLE-LINE] Vehicle {vehicle_state.tracker_id} ({vehicle_state.class_name}) "
-                  f"completed {sequence_type.upper()} sequence: {direction}")
-
-            # Reset vehicle state for potential re-counting
-            vehicle_state.reset()
-            return True
-
-        return False
-
     def cleanup_old_states(self, active_tracker_ids: Set[int], current_time: float):
-        """Remove states for inactive vehicles and expired crossings."""
+        """Remove states for inactive vehicles and reset vehicles that have left the area."""
         to_remove = []
 
         for tracker_id, vehicle_state in self.vehicle_states.items():
-            # Remove if vehicle is no longer active
+            # Remove if vehicle is no longer active (left tracking area)
             if tracker_id not in active_tracker_ids:
                 to_remove.append(tracker_id)
                 continue
 
-            # Remove if single line crossing is too old
-            if (vehicle_state.line_a_cross_time is not None and
-                current_time - vehicle_state.line_a_cross_time > self.time_window_seconds):
-                vehicle_state.line_a_cross_time = None
-                vehicle_state.line_a_cross_direction = None
-
-            if (vehicle_state.line_b_cross_time is not None and
-                current_time - vehicle_state.line_b_cross_time > self.time_window_seconds):
-                vehicle_state.line_b_cross_time = None
-                vehicle_state.line_b_cross_direction = None
+            # Reset passage state if vehicle has been inactive for too long
+            # This handles cases where a vehicle might re-enter the area
+            if (vehicle_state.first_cross_time is not None and
+                current_time - vehicle_state.first_cross_time > self.time_window_seconds):
+                vehicle_state.reset_for_new_passage()
+                print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} passage state reset (timeout)")
 
         for tracker_id in to_remove:
+            print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} removed from tracking")
             del self.vehicle_states[tracker_id]
 
     def get_total_counts(self) -> Dict[str, int]:
         """Get total counts across all vehicle classes."""
-        totals = {
-            "a_to_b_incoming": 0, "a_to_b_outgoing": 0,
-            "b_to_a_incoming": 0, "b_to_a_outgoing": 0
-        }
+        totals = {"incoming": 0, "outgoing": 0}
 
-        for sequence_type, class_data in self.count_data.items():
-            for class_name, counts in class_data.items():
-                totals[f"{sequence_type}_incoming"] += counts["incoming"]
-                totals[f"{sequence_type}_outgoing"] += counts["outgoing"]
+        for class_data in self.count_data.values():
+            totals["incoming"] += class_data["incoming"]
+            totals["outgoing"] += class_data["outgoing"]
 
         return totals
 
@@ -246,32 +217,20 @@ class DoubleLineVehicleCounter:
         processed_counts = []
 
         # Process each vehicle class
-        all_classes = set()
-        for sequence_data in self.count_data.values():
-            all_classes.update(sequence_data.keys())
-
-        for class_name in all_classes:
-            a_to_b_data = self.count_data["a_to_b"][class_name]
-            b_to_a_data = self.count_data["b_to_a"][class_name]
-
+        for class_name, class_data in self.count_data.items():
             # Calculate average speeds
             def calc_avg_speed(total_speed, count):
                 return total_speed / count if count > 0 else 0.0
 
             processed_counts.append({
                 "vehicle_class": class_name,
-                "a_to_b_incoming": a_to_b_data["incoming"],
-                "a_to_b_outgoing": a_to_b_data["outgoing"],
-                "b_to_a_incoming": b_to_a_data["incoming"],
-                "b_to_a_outgoing": b_to_a_data["outgoing"],
-                "avg_speed_a_to_b_incoming_kmh": round(calc_avg_speed(
-                    a_to_b_data["total_speed_incoming"], a_to_b_data["count_for_speed_incoming"]), 2),
-                "avg_speed_a_to_b_outgoing_kmh": round(calc_avg_speed(
-                    a_to_b_data["total_speed_outgoing"], a_to_b_data["count_for_speed_outgoing"]), 2),
-                "avg_speed_b_to_a_incoming_kmh": round(calc_avg_speed(
-                    b_to_a_data["total_speed_incoming"], b_to_a_data["count_for_speed_incoming"]), 2),
-                "avg_speed_b_to_a_outgoing_kmh": round(calc_avg_speed(
-                    b_to_a_data["total_speed_outgoing"], b_to_a_data["count_for_speed_outgoing"]), 2)
+                "incoming_count": class_data["incoming"],
+                "outgoing_count": class_data["outgoing"],
+                "total_count": class_data["incoming"] + class_data["outgoing"],
+                "avg_speed_incoming_kmh": round(calc_avg_speed(
+                    class_data["total_speed_incoming"], class_data["count_for_speed_incoming"]), 2),
+                "avg_speed_outgoing_kmh": round(calc_avg_speed(
+                    class_data["total_speed_outgoing"], class_data["count_for_speed_outgoing"]), 2)
             })
 
         # Add summary row if there are any vehicles
@@ -279,23 +238,18 @@ class DoubleLineVehicleCounter:
             totals = self.get_total_counts()
 
             # Calculate overall average speeds
-            def calc_overall_avg(sequence_type, direction):
-                total_speed = sum(data[f"total_speed_{direction}"]
-                                for data in self.count_data[sequence_type].values())
-                total_count = sum(data[f"count_for_speed_{direction}"]
-                                for data in self.count_data[sequence_type].values())
+            def calc_overall_avg(direction):
+                total_speed = sum(data[f"total_speed_{direction}"] for data in self.count_data.values())
+                total_count = sum(data[f"count_for_speed_{direction}"] for data in self.count_data.values())
                 return total_speed / total_count if total_count > 0 else 0.0
 
             processed_counts.append({
                 "vehicle_class": "TOTAL",
-                "a_to_b_incoming": totals["a_to_b_incoming"],
-                "a_to_b_outgoing": totals["a_to_b_outgoing"],
-                "b_to_a_incoming": totals["b_to_a_incoming"],
-                "b_to_a_outgoing": totals["b_to_a_outgoing"],
-                "avg_speed_a_to_b_incoming_kmh": round(calc_overall_avg("a_to_b", "incoming"), 2),
-                "avg_speed_a_to_b_outgoing_kmh": round(calc_overall_avg("a_to_b", "outgoing"), 2),
-                "avg_speed_b_to_a_incoming_kmh": round(calc_overall_avg("b_to_a", "incoming"), 2),
-                "avg_speed_b_to_a_outgoing_kmh": round(calc_overall_avg("b_to_a", "outgoing"), 2)
+                "incoming_count": totals["incoming"],
+                "outgoing_count": totals["outgoing"],
+                "total_count": totals["incoming"] + totals["outgoing"],
+                "avg_speed_incoming_kmh": round(calc_overall_avg("incoming"), 2),
+                "avg_speed_outgoing_kmh": round(calc_overall_avg("outgoing"), 2)
             })
 
         return processed_counts
@@ -469,7 +423,7 @@ def main():
             print("Please check counting_line_a and counting_line_b in your zone configuration file.")
             return
 
-        print("[INFO] Advanced double-line vehicle counting enabled")
+        print("[INFO] Advanced single-passage vehicle counting enabled")
         print(f"[INFO] Line A: {config.COUNTING_LINE_A_COORDS}")
         print(f"[INFO] Line B: {config.COUNTING_LINE_B_COORDS}")
     else:
@@ -618,7 +572,7 @@ def main():
     if advanced_counting_enabled:
         double_line_counter = DoubleLineVehicleCounter(
             video_fps=video_info.fps,
-            passage_timeout_seconds=30.0
+            time_window_seconds=30.0
         )
 
     # State variables
@@ -878,8 +832,13 @@ def main():
             # Draw live vehicle counter if advanced counting enabled
             if advanced_counting_enabled:
                 totals = double_line_counter.get_total_counts()
-                annotated_frame = annotation_manager.draw_live_vehicle_counts(
-                    annotated_frame, totals["incoming"], totals["outgoing"]
+                # Use the existing display method with simplified totals
+                annotated_frame = annotation_manager.draw_live_double_line_counts(
+                    annotated_frame,
+                    totals["incoming"],  # Show total incoming as "A→B incoming"
+                    totals["outgoing"],  # Show total outgoing as "A→B outgoing"
+                    0,  # B→A incoming (not used in single-passage counting)
+                    0   # B→A outgoing (not used in single-passage counting)
                 )
 
             # Write frame
@@ -907,18 +866,24 @@ def main():
     if args.segment_speed and event_processor.segment_results:
         io_manager.save_segment_speeds(event_processor.segment_results)
 
-    # Save double-line vehicle counting results if enabled
+    # Save single-passage vehicle counting results if enabled
     if advanced_counting_enabled:
         processed_counts = double_line_counter.get_processed_counts_for_export()
-        # Check if we should use save_vehicle_counts or save_double_line_vehicle_counts
+        # Use the existing double-line method for compatibility
+        # The data structure is simpler but still compatible
         if hasattr(io_manager, 'save_double_line_vehicle_counts'):
             io_manager.save_double_line_vehicle_counts(processed_counts)
         else:
-            # Fallback to save_vehicle_counts method
-            io_manager.save_vehicle_counts(processed_counts)
+            # Fallback - create a simple CSV directly
+            import pandas as pd
+            from pathlib import Path
+            df = pd.DataFrame(processed_counts)
+            csv_file = Path(config.RESULTS_OUTPUT_DIR) / f"vehicle_counts_{io_manager.timestamp}.csv"
+            df.to_csv(csv_file, index=False)
+            print(f"Vehicle counts saved to: {csv_file}")
 
         totals = double_line_counter.get_total_counts()
-        print(f"Double-line counting results saved:")
+        print(f"Single-passage counting results saved:")
         print(f"  Total: {totals['incoming']} incoming, {totals['outgoing']} outgoing")
 
     # Print summary
