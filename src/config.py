@@ -37,6 +37,16 @@ class Config:
         # Zone configuration
         self.ENC_ZONE_CONFIG = os.getenv("ENC_ZONE_CONFIG")
 
+        # Speed calibration configuration
+        self.SPEED_CALIBRATION_MODEL_TYPE = os.getenv("SPEED_CALIBRATION_MODEL_TYPE", "linear")
+
+        # Linear / RANSAC-Linear model coefficients
+        self.SPEED_CALIBRATION_MODEL_A = float(os.getenv("SPEED_CALIBRATION_MODEL_A", "1.0"))
+        self.SPEED_CALIBRATION_MODEL_B = float(os.getenv("SPEED_CALIBRATION_MODEL_B", "0.0"))
+
+        # Polynomial model coefficients (stored as string, will be parsed in main.py)
+        self.SPEED_CALIBRATION_POLY_COEFFS = os.getenv("SPEED_CALIBRATION_POLY_COEFFS", "0.0,1.0")
+
         # Default parameters
         self.CLIP_SECONDS = 20
         self.DISPLAY = False
@@ -116,6 +126,11 @@ class Config:
             raise ValueError(f"Invalid JSON in custom classes file: {e}")
         except Exception as e:
             raise ValueError(f"Error loading custom classes file: {e}")
+
+        # Speed stabilization parameters
+        self.SPEED_SMOOTHING_WINDOW = int(os.getenv("SPEED_SMOOTHING_WINDOW", "5"))
+        self.MAX_ACCELERATION = float(os.getenv("MAX_ACCELERATION", "5.0"))
+        self.MIN_SPEED_THRESHOLD = float(os.getenv("MIN_SPEED_THRESHOLD", "0.1"))
 
     @staticmethod
     def load_zones(path: str) -> Tuple[np.ndarray, np.ndarray]:

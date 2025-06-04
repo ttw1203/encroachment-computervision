@@ -1,5 +1,5 @@
 """Event processing for TTC and segment speed calculations."""
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Callable
 import math
 import numpy as np
 from collections import defaultdict
@@ -9,10 +9,18 @@ from src.geometry_and_transforms import line_side
 class EventProcessor:
     """Processes various event types including TTC and segment speeds."""
 
-    def __init__(self, video_fps: float, collision_distance: float = 2.0):
-        """Initialize event processor."""
+    def __init__(self, video_fps: float, collision_distance: float = 2.0,
+                 calibration_func: Optional[Callable[[float], float]] = None):
+        """Initialize event processor.
+
+        Args:
+            video_fps: Frames per second of the video
+            collision_distance: Distance threshold for collision detection (meters)
+            calibration_func: Optional function to calibrate speeds (takes raw speed, returns calibrated)
+        """
         self.video_fps = video_fps
         self.collision_distance = collision_distance
+        self.calibration_func = calibration_func
         self.segment_state: Dict = {}
         self.segment_results: List = []
         self.ttc_rows: List = []
@@ -103,6 +111,10 @@ class EventProcessor:
                 dx = Xf - st['x0m']
                 dy = Yf - st['y0m']
                 v_ms = math.hypot(dx, dy) / dt
+
+                # Apply calibration if function is available
+                if self.calibration_func is not None:
+                    v_ms = self.calibration_func(v_ms)
 
                 result = {
                     'vehicle_id': tracker_id,

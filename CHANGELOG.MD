@@ -1,9 +1,38 @@
 # Changelog
 
-All notable changes to the Encroachment Computer Vision System will be documented in this file.
+## 1.0.0
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+### Added
+- Speed calibration support using multiple models:
+  - **Linear** (`y = Ax + B`)
+  - **2nd-degree polynomial**
+  - **3rd-degree polynomial**
+  - **RANSAC-based linear regression**
+- `.env.bns` config support for calibration parameters (`A`, `B`, polynomial coefficients)
+- `apply_speed_calibration()` method in Kalman Filter module
+- Calibration applied to both Kalman-based velocity and segment-based speeds
+- CLI parameters for stabilization:
+  - `--speed_smoothing_window`
+  - `--max_acceleration`
+  - `--min_speed_threshold`
+
+### Enhanced
+- Kalman Filter:
+  - Lower process noise, higher measurement noise for stability
+  - Adaptive noise modeling for position and velocity
+- Speed smoothing via Exponential Moving Average (EMA)
+- Damping mechanism in calibration to avoid noise amplification
+- Physical constraints:
+  - Max acceleration limit
+  - Direction change suppression
+  - Speed thresholding
+
+### Fixed
+- Prevented tracker ID switches using detection validation
+- Smoothed out erratic speed spikes and sudden direction reversals
+
+### Performance
+- All stabilization and calibration steps optimized to maintain <5% extra runtime per frame
 
 ## [2.0.0] - 2025-06-04
 
@@ -188,23 +217,12 @@ RF_DETR_VARIANT=base|large                           # Model size variant
 #### 🙏 Credits
 - **RF-DETR Team**: Roboflow team for developing and open-sourcing RF-DETR
 - **Supervision Library**: Continued excellence in computer vision utilities
-- **Community**: Feedback and testing from the computer vision community
+- **Community**: Feedback and testing.
 
 ---
 
-## [1.0.0] - Previous Release
 
-### Initial Features
-- YOLO-based object detection and tracking
-- Multi-object tracking with StrongSORT and ByteTrack
-- Speed estimation using perspective transformation
-- Encroachment detection with custom polygon zones
-- Time-to-collision (TTC) calculation
-- Kalman filtering for trajectory prediction
-- Zone management and visualization
-- Comprehensive CSV output and metrics
-- Real-time video processing pipeline
+
 
 ---
 
-**Note**: This changelog follows semantic versioning. The RF-DETR integration represents a major version bump (2.0.0) due to significant new functionality, while maintaining full backward compatibility.
