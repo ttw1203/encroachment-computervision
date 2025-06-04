@@ -11,6 +11,11 @@ right_zone:
   - [4618, 2160]
   - [3628, 2160]
 
+# Vehicle counting line (pixel coordinates)
+counting_line:
+  - [912, 1170]
+  - [3066, 1122]
+
 # Segment lines
 segment_entry: [[1977, 1137], [2800, 1152]]   # upstream line
 segment_exit: [[2019, 1466], [3342, 1490]]   # downstream line

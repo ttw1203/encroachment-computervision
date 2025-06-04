@@ -3,7 +3,7 @@ import os
 import json
 import yaml
 from pathlib import Path
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 import numpy as np
 from dotenv import load_dotenv
 
@@ -37,6 +37,9 @@ class Config:
         # Zone configuration
         self.ENC_ZONE_CONFIG = os.getenv("ENC_ZONE_CONFIG")
 
+        # Load counting line coordinates
+        self.COUNTING_LINE_COORDS = self.load_counting_line(self.ENC_ZONE_CONFIG)
+
         # Speed calibration configuration
         self.SPEED_CALIBRATION_MODEL_TYPE = os.getenv("SPEED_CALIBRATION_MODEL_TYPE", "linear")
 
@@ -46,6 +49,11 @@ class Config:
 
         # Polynomial model coefficients (stored as string, will be parsed in main.py)
         self.SPEED_CALIBRATION_POLY_COEFFS = os.getenv("SPEED_CALIBRATION_POLY_COEFFS", "0.0,1.0")
+
+        # Speed stabilization parameters
+        self.SPEED_SMOOTHING_WINDOW = int(os.getenv("SPEED_SMOOTHING_WINDOW", "5"))
+        self.MAX_ACCELERATION = float(os.getenv("MAX_ACCELERATION", "5.0"))
+        self.MIN_SPEED_THRESHOLD = float(os.getenv("MIN_SPEED_THRESHOLD", "0.1"))
 
         # Default parameters
         self.CLIP_SECONDS = 20
@@ -65,6 +73,37 @@ class Config:
 
         # TTC parameters
         self.COLLISION_DISTANCE = 2.0  # meters
+
+    @staticmethod
+    def load_counting_line(path: str) -> Optional[np.ndarray]:
+        """Load counting line coordinates from YAML or JSON file.
+
+        Returns:
+            NumPy array of shape (2, 2) with line endpoints [[x1, y1], [x2, y2]]
+            or None if counting_line is not defined in the configuration file.
+        """
+        if not path or not os.path.exists(path):
+            return None
+
+        try:
+            ext = os.path.splitext(path)[1].lower()
+            with open(path, "r") as f:
+                data = yaml.safe_load(f) if ext in {".yml", ".yaml"} else json.load(f)
+
+            if "counting_line" not in data:
+                return None
+
+            counting_line = np.asarray(data["counting_line"], dtype=np.int32)
+
+            # Validate shape
+            if counting_line.shape != (2, 2):
+                raise ValueError(f"counting_line must have shape (2, 2), got {counting_line.shape}")
+
+            return counting_line
+
+        except Exception as e:
+            print(f"Warning: Failed to load counting_line from {path}: {e}")
+            return None
 
     def get_rf_detr_config(self) -> Dict[str, Any]:
         """Get RF-DETR configuration dictionary."""
@@ -126,11 +165,6 @@ class Config:
             raise ValueError(f"Invalid JSON in custom classes file: {e}")
         except Exception as e:
             raise ValueError(f"Error loading custom classes file: {e}")
-
-        # Speed stabilization parameters
-        self.SPEED_SMOOTHING_WINDOW = int(os.getenv("SPEED_SMOOTHING_WINDOW", "5"))
-        self.MAX_ACCELERATION = float(os.getenv("MAX_ACCELERATION", "5.0"))
-        self.MIN_SPEED_THRESHOLD = float(os.getenv("MIN_SPEED_THRESHOLD", "0.1"))
 
     @staticmethod
     def load_zones(path: str) -> Tuple[np.ndarray, np.ndarray]:

@@ -14,7 +14,7 @@ from src.config import Config
 from src.detection_and_tracking import DetectionTracker, filter_rider_persons
 from src.kalman_filter import KalmanFilterManager
 from src.zone_management import ZoneManager
-from src.geometry_and_transforms import ViewTransformer
+from src.geometry_and_transforms import ViewTransformer, line_side
 from src.annotators import AnnotationManager
 from src.event_processing import EventProcessor
 from src.io_utils import IOManager
@@ -171,6 +171,14 @@ def main():
     # Initialize configuration
     config = Config()
 
+    # Check if counting line is available
+    if config.COUNTING_LINE_COORDS is None:
+        print("[WARNING] No counting line defined in zone configuration. Vehicle counting will be disabled.")
+        counting_enabled = False
+    else:
+        print(f"[INFO] Vehicle counting enabled with line: {config.COUNTING_LINE_COORDS}")
+        counting_enabled = True
+
     # Validate RF-DETR configuration if selected
     if args.detector_model == "rf_detr":
         try:
@@ -316,6 +324,19 @@ def main():
     ttc_labels = defaultdict(list)
     ttc_event_count = 0
 
+    # Vehicle counting state variables
+    if counting_enabled:
+        vehicle_count_data = defaultdict(lambda: {
+            "incoming": 0,
+            "outgoing": 0,
+            "total_speed_incoming": 0.0,
+            "count_for_speed_incoming": 0,
+            "total_speed_outgoing": 0.0,
+            "count_for_speed_outgoing": 0
+        })
+        last_vehicle_positions = {}  # tracker_id -> (prev_x_px, prev_y_px)
+        counted_vehicle_ids = set()  # prevent duplicate counts
+
     last_seen_frame = {}
     previous_detections = {}  # Store previous detection positions
     MAX_AGE_FRAMES = int(video_info.fps * config.MAX_AGE_SECONDS)
@@ -334,6 +355,9 @@ def main():
 
             bar.update(1)
             ttc_labels.clear()
+
+            # Calculate current frame time for visual feedback
+            current_frame_time_sec = frame_idx / video_info.fps
 
             # Detect and track
             detections = detector_tracker.detect_and_track(
@@ -379,6 +403,9 @@ def main():
             points = detections.get_anchors_coordinates(anchor=sv.Position.CENTER)
             points = view_transformer.transform_points(points=points).astype(np.float32)
 
+            # Vehicle counting logic
+            crossing_detected = False
+
             for det_idx, (tracker_id, [x, y]) in enumerate(zip(detections.tracker_id, points)):
                 # Update Kalman filter
                 dt = 1 / video_info.fps
@@ -392,6 +419,63 @@ def main():
 
                 # Get smoothed velocity for display
                 Vx_smooth, Vy_smooth = kf_manager.get_smoothed_velocity(tracker_id)
+
+                # Vehicle counting line crossing detection
+                if counting_enabled:
+                    # Get current representative point in pixel coordinates (bottom-center of bounding box)
+                    bbox = detections.xyxy[det_idx]
+                    current_point_px = (
+                        (bbox[0] + bbox[2]) / 2,  # center x
+                        bbox[3]  # bottom y
+                    )
+
+                    # Get previous position
+                    previous_point_px = last_vehicle_positions.get(tracker_id)
+
+                    # Check for line crossing using "Change of Side" method
+                    if (previous_point_px is not None and
+                        tracker_id not in counted_vehicle_ids):
+
+                        # Calculate line sides
+                        L1, L2 = config.COUNTING_LINE_COORDS[0], config.COUNTING_LINE_COORDS[1]
+                        previous_side = line_side(previous_point_px, L1, L2)
+                        current_side = line_side(current_point_px, L1, L2)
+
+                        # Check crossing condition: Change of Side method
+                        if (previous_side != 0 and current_side != 0 and
+                            previous_side != current_side):
+
+                            # Determine direction based on y-axis movement
+                            direction = None
+                            if current_point_px[1] > previous_point_px[1]:
+                                direction = "incoming"  # y increases (moves down)
+                            elif current_point_px[1] < previous_point_px[1]:
+                                direction = "outgoing"  # y decreases (moves up)
+
+                            if direction:
+                                # Get vehicle class
+                                class_id = int(detections.class_id[det_idx])
+                                class_name = detector_tracker.get_class_name(class_id)
+
+                                # Update counting data
+                                vehicle_count_data[class_name][direction] += 1
+
+                                # Get current speed for averaging
+                                current_speed = math.hypot(Vx_smooth, Vy_smooth)
+                                if current_speed >= args.min_speed_threshold:
+                                    # Convert to km/h for storage
+                                    speed_kmh = current_speed * 3.6
+                                    vehicle_count_data[class_name][f'total_speed_{direction}'] += speed_kmh
+                                    vehicle_count_data[class_name][f'count_for_speed_{direction}'] += 1
+
+                                # Add to counted set to prevent duplicates
+                                counted_vehicle_ids.add(tracker_id)
+                                crossing_detected = True
+
+                                print(f"[COUNTING] Vehicle {tracker_id} ({class_name}) crossed line: {direction}")
+
+                    # Update last position for next frame
+                    last_vehicle_positions[tracker_id] = current_point_px
 
                 # Process segment speed if enabled
                 if args.segment_speed:
@@ -450,6 +534,10 @@ def main():
                     predicted_pixels = view_transformer.inverse_transform_points(future_positions_array)
                     future_coordinates[tracker_id] = predicted_pixels.tolist()
 
+            # Signal counting line crossing for visual feedback
+            if counting_enabled and crossing_detected:
+                annotation_manager.signal_counting_line_cross(current_frame_time_sec)
+
             # Clean up old tracks
             to_remove = []
             for tid in list(kf_manager.get_all_states().keys()):
@@ -462,6 +550,10 @@ def main():
                 future_coordinates.pop(tid, None)
                 last_seen_frame.pop(tid, None)
                 previous_detections.pop(tid, None)
+                # Clean up counting state
+                if counting_enabled:
+                    last_vehicle_positions.pop(tid, None)
+                    counted_vehicle_ids.discard(tid)
 
             # Generate labels and save metrics using smoothed speeds
             labels = []
@@ -505,15 +597,30 @@ def main():
 
                 labels.append(label)
 
-
             # Draw segment lines if enabled
             if args.segment_speed:
                 frame = annotation_manager.draw_segment_lines(frame, ENTRY_LINE, EXIT_LINE)
+
+            # Draw counting line if enabled
+            if counting_enabled:
+                frame = annotation_manager.draw_counting_line(
+                    frame, config.COUNTING_LINE_COORDS, current_frame_time_sec
+                )
 
             # Annotate frame
             annotated_frame = annotation_manager.annotate_frame(
                 frame, detections, labels, future_coordinates, active_ids
             )
+
+            # Draw live vehicle counter if counting enabled
+            if counting_enabled:
+                # Calculate total counts across all vehicle classes
+                total_incoming = sum(data["incoming"] for data in vehicle_count_data.values())
+                total_outgoing = sum(data["outgoing"] for data in vehicle_count_data.values())
+
+                annotated_frame = annotation_manager.draw_live_vehicle_counts(
+                    annotated_frame, total_incoming, total_outgoing
+                )
 
             # Write frame
             sink.write_frame(annotated_frame)
@@ -539,6 +646,68 @@ def main():
 
     if args.segment_speed and event_processor.segment_results:
         io_manager.save_segment_speeds(event_processor.segment_results)
+
+    # Save vehicle counting results if enabled
+    if counting_enabled:
+        # Calculate average speeds and prepare data for CSV
+        processed_counts = []
+        for class_name, data in vehicle_count_data.items():
+            # Calculate average speeds
+            avg_speed_incoming = (
+                data["total_speed_incoming"] / data["count_for_speed_incoming"]
+                if data["count_for_speed_incoming"] > 0 else 0.0
+            )
+            avg_speed_outgoing = (
+                data["total_speed_outgoing"] / data["count_for_speed_outgoing"]
+                if data["count_for_speed_outgoing"] > 0 else 0.0
+            )
+
+            processed_counts.append({
+                "vehicle_class": class_name,
+                "total_incoming": data["incoming"],
+                "total_outgoing": data["outgoing"],
+                "avg_speed_incoming_kmh": round(avg_speed_incoming, 2),
+                "avg_speed_outgoing_kmh": round(avg_speed_outgoing, 2)
+            })
+
+        # Add summary row if there are any vehicles
+        if processed_counts:
+            total_incoming = sum(row["total_incoming"] for row in processed_counts)
+            total_outgoing = sum(row["total_outgoing"] for row in processed_counts)
+
+            # Calculate overall average speeds weighted by count
+            total_speed_incoming = sum(
+                data["total_speed_incoming"] for data in vehicle_count_data.values()
+            )
+            total_count_incoming = sum(
+                data["count_for_speed_incoming"] for data in vehicle_count_data.values()
+            )
+            total_speed_outgoing = sum(
+                data["total_speed_outgoing"] for data in vehicle_count_data.values()
+            )
+            total_count_outgoing = sum(
+                data["count_for_speed_outgoing"] for data in vehicle_count_data.values()
+            )
+
+            overall_avg_incoming = (
+                total_speed_incoming / total_count_incoming
+                if total_count_incoming > 0 else 0.0
+            )
+            overall_avg_outgoing = (
+                total_speed_outgoing / total_count_outgoing
+                if total_count_outgoing > 0 else 0.0
+            )
+
+            processed_counts.append({
+                "vehicle_class": "TOTAL",
+                "total_incoming": total_incoming,
+                "total_outgoing": total_outgoing,
+                "avg_speed_incoming_kmh": round(overall_avg_incoming, 2),
+                "avg_speed_outgoing_kmh": round(overall_avg_outgoing, 2)
+            })
+
+        io_manager.save_vehicle_counts(processed_counts)
+        print(f"Vehicle counting results saved. Total crossings: {total_incoming} incoming, {total_outgoing} outgoing")
 
     # Print summary
     elapsed = tm.time() - t0

@@ -32,6 +32,107 @@ class AnnotationManager:
         # Color cache for future trajectories
         self.future_colors: Dict[int, Tuple[int, int, int]] = {}
 
+        # Counting line visualization state
+        self.counting_line_last_cross_time_sec = -float('inf')
+        self.counting_line_highlight_duration_sec = 0.5
+        self.counting_line_default_color = (255, 255, 0)  # cyan
+        self.counting_line_crossed_color = (0, 255, 255)  # yellow
+
+    def signal_counting_line_cross(self, current_time_seconds: float) -> None:
+        """Signal that a vehicle has crossed the counting line.
+
+        Args:
+            current_time_seconds: Current time in seconds from video start
+        """
+        self.counting_line_last_cross_time_sec = current_time_seconds
+
+    def draw_counting_line(self, frame: np.ndarray, line_coords: np.ndarray,
+                          current_time_seconds: float) -> np.ndarray:
+        """Draw the counting line with color change on recent crossing.
+
+        Args:
+            frame: Current video frame
+            line_coords: Line coordinates as numpy array [[x1, y1], [x2, y2]]
+            current_time_seconds: Current time in seconds from video start
+
+        Returns:
+            Frame with counting line drawn
+        """
+        if line_coords is None or len(line_coords) != 2:
+            return frame
+
+        # Determine line color based on recent crossing
+        time_since_crossing = current_time_seconds - self.counting_line_last_cross_time_sec
+
+        if time_since_crossing < self.counting_line_highlight_duration_sec:
+            line_color = self.counting_line_crossed_color
+            line_thickness = self.thickness + 2
+        else:
+            line_color = self.counting_line_default_color
+            line_thickness = self.thickness
+
+        # Draw the counting line
+        cv2.line(
+            frame,
+            tuple(line_coords[0].astype(int)),
+            tuple(line_coords[1].astype(int)),
+            line_color,
+            line_thickness,
+            lineType=cv2.LINE_AA
+        )
+
+        # Add label
+        midpoint = ((line_coords[0] + line_coords[1]) / 2).astype(int)
+        cv2.putText(
+            frame,
+            "COUNTING LINE",
+            (midpoint[0] - 60, midpoint[1] - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            line_color,
+            2,
+            cv2.LINE_AA
+        )
+
+        return frame
+
+    def draw_live_vehicle_counts(self, frame: np.ndarray, incoming_count: int,
+                                outgoing_count: int) -> np.ndarray:
+        """Draw live vehicle counter on the video frame.
+
+        Args:
+            frame: Current video frame
+            incoming_count: Total incoming vehicle count
+            outgoing_count: Total outgoing vehicle count
+
+        Returns:
+            Frame with live counter display
+        """
+        # Counter background
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (10, 10), (350, 100), (0, 0, 0), -1)
+        frame = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
+
+        # Counter text
+        text_color = (255, 255, 255)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 2
+        thickness = 3
+
+        # Title
+        cv2.putText(frame, "VEHICLE COUNTER", (20, 35),
+                   font, font_scale, text_color, thickness, cv2.LINE_AA)
+
+        # Incoming count
+        cv2.putText(frame, f"Incoming: {incoming_count}", (20, 70),
+                   font, font_scale - 0.1, (0, 255, 0), thickness, cv2.LINE_AA)
+
+        # Outgoing count
+        cv2.putText(frame, f"Outgoing: {outgoing_count}", (20, 105),
+                   font, font_scale - 0.1, (0, 0, 255), thickness, cv2.LINE_AA)
+
+        return frame
+
     def annotate_frame(self, frame: np.ndarray, detections: sv.Detections,
                        labels: List[str], future_coordinates: Dict[int, List],
                        active_ids: set) -> np.ndarray:
