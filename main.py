@@ -505,10 +505,13 @@ def main():
     video_info = sv.VideoInfo.from_video_path(video_path=args.source_video_path)
 
     # Calculate clip frames
-    clip_frames = min(
-        int(video_info.fps * config.CLIP_SECONDS),
-        video_info.total_frames
-    )
+    if config.CLIP_SECONDS <= 0:  # For example, 0 or negative means full video
+        clip_frames = video_info.total_frames
+    else:
+        clip_frames = min(
+            int(video_info.fps * config.CLIP_SECONDS),
+            video_info.total_frames
+        )
 
     # Initialize components
     SOURCE, TARGET = config.get_source_target_points()
