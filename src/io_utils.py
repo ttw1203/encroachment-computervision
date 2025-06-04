@@ -33,42 +33,75 @@ class IOManager:
         return csv_file
 
     def save_double_line_vehicle_counts(self, processed_counts_list: List[Dict]) -> Path:
-        """Save double-line vehicle counting results to CSV.
+        """Save vehicle counting results to CSV (compatible with both double-line and single-passage counting).
 
         Args:
-            processed_counts_list: List of dictionaries with double-line counting data
+            processed_counts_list: List of dictionaries with counting data
 
         Returns:
             Path to saved CSV file
         """
+        if not processed_counts_list:
+            print("[IOManager] No counting data to save")
+            return None
+
         df = pd.DataFrame(processed_counts_list)
 
-        # Ensure all required columns exist
-        required_columns = [
-            'vehicle_class',
-            'a_to_b_incoming',
-            'a_to_b_outgoing',
-            'b_to_a_incoming',
-            'b_to_a_outgoing',
-            'avg_speed_a_to_b_incoming_kmh',
-            'avg_speed_a_to_b_outgoing_kmh',
-            'avg_speed_b_to_a_incoming_kmh',
-            'avg_speed_b_to_a_outgoing_kmh'
-        ]
+        # Check if this is single-passage counting data (new format)
+        if 'incoming_count' in df.columns:
+            # Single-passage counting format
+            required_columns = [
+                'vehicle_class',
+                'incoming_count',
+                'outgoing_count',
+                'total_count',
+                'avg_speed_incoming_kmh',
+                'avg_speed_outgoing_kmh'
+            ]
 
-        for col in required_columns:
-            if col not in df.columns:
-                if 'avg_speed' in col:
-                    df[col] = 0.0
-                else:
-                    df[col] = 0
+            for col in required_columns:
+                if col not in df.columns:
+                    if 'avg_speed' in col:
+                        df[col] = 0.0
+                    elif 'total_count' in col:
+                        # Calculate total if missing
+                        df[col] = df.get('incoming_count', 0) + df.get('outgoing_count', 0)
+                    else:
+                        df[col] = 0
 
-        # Reorder columns
-        df = df[required_columns]
+            # Reorder columns
+            df = df[required_columns]
+            csv_file = self.output_dir / f"vehicle_counts_{self.timestamp}.csv"
+            file_type = "vehicle counts"
 
-        csv_file = self.output_dir / f"double_line_vehicle_counts_{self.timestamp}.csv"
+        else:
+            # Legacy double-line counting format
+            required_columns = [
+                'vehicle_class',
+                'a_to_b_incoming',
+                'a_to_b_outgoing',
+                'b_to_a_incoming',
+                'b_to_a_outgoing',
+                'avg_speed_a_to_b_incoming_kmh',
+                'avg_speed_a_to_b_outgoing_kmh',
+                'avg_speed_b_to_a_incoming_kmh',
+                'avg_speed_b_to_a_outgoing_kmh'
+            ]
+
+            for col in required_columns:
+                if col not in df.columns:
+                    if 'avg_speed' in col:
+                        df[col] = 0.0
+                    else:
+                        df[col] = 0
+
+            # Reorder columns
+            df = df[required_columns]
+            csv_file = self.output_dir / f"double_line_vehicle_counts_{self.timestamp}.csv"
+            file_type = "double-line vehicle counts"
+
         df.to_csv(csv_file, index=False)
-        print(f"[IOManager] Double-line vehicle counts saved to: {csv_file}")
+        print(f"[IOManager] {file_type.title()} saved to: {csv_file}")
         return csv_file
 
     def save_ttc_events(self, ttc_rows: List[List]) -> Path:
