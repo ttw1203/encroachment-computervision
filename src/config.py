@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 class Config:
     """Centralized configuration management."""
 
-    def __init__(self, env_path: str = ".env.boardbazar"):
+    def __init__(self, env_path: str = ".env.mirpur"):
         """Initialize configuration from environment file."""
         load_dotenv(dotenv_path=env_path)
 
