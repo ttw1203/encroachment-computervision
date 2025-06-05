@@ -10,6 +10,26 @@ from typing import List, Dict, Optional, Tuple
 class IOManager:
     """Manages file I/O operations."""
 
+    def save_enhanced_ttc_events(self, enhanced_ttc_rows: List[List]) -> Path:
+        """Save enhanced TTC events with additional filtering metrics."""
+        df = pd.DataFrame(
+            enhanced_ttc_rows,
+            columns=[
+                "frame",
+                "follower_id", "follower_class",
+                "leader_id", "leader_class",
+                "closing_distance_m",
+                "relative_velocity_m_s",
+                "ttc_s",
+                "confidence_score",
+                "relative_angle_deg"
+            ]
+        )
+        csv_file = self.output_dir / f"enhanced_ttc_events_{self.timestamp}.csv"
+        df.to_csv(csv_file, index=False)
+        print(f"[IOManager] Enhanced TTC events saved to: {csv_file}")
+        return csv_file
+
     def __init__(self, output_dir: str = "results"):
         """Initialize IO manager."""
         self.output_dir = Path(output_dir)

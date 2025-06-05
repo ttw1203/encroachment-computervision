@@ -270,6 +270,32 @@ def parse_arguments() -> argparse.Namespace:
         help="Path to the environment configuration file (default: .env.bns)",
         type=str
     )
+    # Enhanced TTC arguments
+    parser.add_argument(
+        "--ttc_threshold_on",
+        type=float,
+        help="TTC threshold for activation (seconds)"
+    )
+    parser.add_argument(
+        "--ttc_threshold_off",
+        type=float,
+        help="TTC threshold for deactivation (seconds)"
+    )
+    parser.add_argument(
+        "--ttc_persistence_frames",
+        type=int,
+        help="Frames required for TTC persistence"
+    )
+    parser.add_argument(
+        "--min_confidence_ttc",
+        type=float,
+        help="Minimum detection confidence for TTC evaluation"
+    )
+    parser.add_argument(
+        "--enable_ttc_debug",
+        action="store_true",
+        help="Enable TTC debug mode and visualizations"
+    )
     parser.add_argument(
         "--no_blend_zones",
         action="store_true",
@@ -387,8 +413,22 @@ def parse_arguments() -> argparse.Namespace:
         help="Minimum speed threshold in m/s below which velocity is set to 0 (default: 0.1)"
     )
 
+    args = parser.parse_args()
 
-    return parser.parse_args()
+    # Override config with command line arguments if provided
+    if hasattr(args, 'ttc_threshold_on') and args.ttc_threshold_on:
+        os.environ['TTC_THRESHOLD_ON'] = str(args.ttc_threshold_on)
+    if hasattr(args, 'ttc_threshold_off') and args.ttc_threshold_off:
+        os.environ['TTC_THRESHOLD_OFF'] = str(args.ttc_threshold_off)
+    if hasattr(args, 'ttc_persistence_frames') and args.ttc_persistence_frames:
+        os.environ['TTC_PERSISTENCE_FRAMES'] = str(args.ttc_persistence_frames)
+    if hasattr(args, 'min_confidence_ttc') and args.min_confidence_ttc:
+        os.environ['MIN_CONFIDENCE_FOR_TTC'] = str(args.min_confidence_ttc)
+    if hasattr(args, 'enable_ttc_debug') and args.enable_ttc_debug:
+        os.environ['ENABLE_TTC_DEBUG'] = 'True'
+
+    return args
+
 
 
 def validate_detection_consistency(detections: sv.Detections, previous_detections: dict[int, np.ndarray],
@@ -426,6 +466,14 @@ def main():
     # Initialize configuration with custom env file
     config = Config(env_path=args.env_file)
 
+    # Validate and print TTC configuration
+    if not config.validate_ttc_config():
+        print("[ERROR] Invalid TTC configuration. Please check your settings.")
+        return
+
+    if config.ENABLE_TTC_DEBUG:
+        config.print_ttc_config_summary()
+
     # Check advanced counting configuration
     advanced_counting_enabled = (args.advanced_counting or
                                config.ENABLE_ADVANCED_VEHICLE_COUNTING)
@@ -455,6 +503,7 @@ def main():
         except (ValueError, FileNotFoundError) as e:
             print(f"[ERROR] RF-DETR configuration error: {e}")
             return
+
 
     # Set up logging
     logging.getLogger('ultralytics').setLevel(logging.CRITICAL)
@@ -582,6 +631,17 @@ def main():
         calibration_func=calibration_func
     )
 
+    # Event processor with enhanced TTC configuration
+    ttc_config = config.get_ttc_config()
+    ttc_config['video_fps'] = video_info.fps  # Update with actual FPS
+
+    event_processor = EventProcessor(
+        video_fps=video_info.fps,
+        collision_distance=config.COLLISION_DISTANCE,
+        calibration_func=calibration_func,
+        ttc_config=ttc_config
+    )
+
     # IO manager using environment variable
     io_manager = IOManager(output_dir=config.RESULTS_OUTPUT_DIR)
 
@@ -666,6 +726,12 @@ def main():
             # Double-line vehicle counting logic
             crossing_detected = False
 
+            # Enhanced TTC calculation with all detection data
+            for det_idx, tracker_id in enumerate(detections.tracker_id):
+                class_id = int(detections.class_id[det_idx])
+                class_name = detector_tracker.get_class_name(class_id)
+                confidence = float(detections.confidence[det_idx])
+
             for det_idx, (tracker_id, [x, y]) in enumerate(zip(detections.tracker_id, points)):
                 # Update Kalman filter
                 dt = 1 / video_info.fps
@@ -722,14 +788,16 @@ def main():
                 class_name = detector_tracker.get_class_name(class_id)
                 event_processor.id_to_class[tracker_id] = class_name
 
-                # Calculate TTC using smoothed velocities
+                # Enhanced TTC calculation - now processes all pairs internally
                 ttc_event = event_processor.calculate_ttc(
                     tracker_id,
                     kf_manager.get_all_states(),
                     last_seen_frame,
                     frame_idx,
                     MAX_AGE_FRAMES,
-                    args.ttc_threshold
+                    args.ttc_threshold,
+                    detections=detections,  # Pass full detections
+                    detector_tracker=detector_tracker  # Pass detector for class lookup
                 )
 
                 if ttc_event:
@@ -874,7 +942,20 @@ def main():
 
         if config.DISPLAY:
             cv2.destroyAllWindows()
+    # Enhanced CSV output with additional TTC metrics
+    if hasattr(event_processor, 'ttc_processor'):
+        # Export enhanced TTC events with additional metrics
+        enhanced_ttc_rows = event_processor.ttc_processor.export_events_for_csv()
+        if enhanced_ttc_rows:
+            io_manager.save_enhanced_ttc_events(enhanced_ttc_rows)
 
+        # Print debug summary if enabled
+        if config.ENABLE_TTC_DEBUG:
+            debug_info = event_processor.ttc_processor.get_debug_info()
+            print(f"Enhanced TTC Debug Summary:")
+            print(f"  Active pairs: {debug_info.get('active_pairs', 0)}")
+            print(f"  Persistent pairs: {debug_info.get('persistent_pairs', 0)}")
+            print(f"  Total validated events: {debug_info.get('total_events', 0)}")
     # Save results
     bar.close()
     print(f"Total TTC events logged: {ttc_event_count}")
