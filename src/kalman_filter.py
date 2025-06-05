@@ -60,7 +60,7 @@ class KalmanFilterManager:
         ], np.float32)
 
         # Increased measurement noise to trust predictions more
-        kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 2.0
+        kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 3.0
 
         return kf
 
