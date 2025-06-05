@@ -265,6 +265,12 @@ def parse_arguments() -> argparse.Namespace:
     config = Config()
 
     parser.add_argument(
+        "--env_file",
+        default=".env.bns",
+        help="Path to the environment configuration file (default: .env.bns)",
+        type=str
+    )
+    parser.add_argument(
         "--no_blend_zones",
         action="store_true",
         help="Disable the translucent curb-lane overlays drawn by blend_zone()"
@@ -416,6 +422,9 @@ def main():
 
     # Initialize configuration
     config = Config()
+
+    # Initialize configuration with custom env file
+    config = Config(env_path=args.env_file)
 
     # Check advanced counting configuration
     advanced_counting_enabled = (args.advanced_counting or
