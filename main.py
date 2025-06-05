@@ -303,7 +303,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--confidence_threshold",
-        default=0.6,
+        default=0.5,
         help="Confidence threshold for the model",
         type=float,
     )
