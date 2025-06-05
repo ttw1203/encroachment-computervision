@@ -60,7 +60,7 @@ class Config:
         self.MIN_SPEED_THRESHOLD = float(os.getenv("MIN_SPEED_THRESHOLD", "0.1"))
 
         # Default parameters
-        self.CLIP_SECONDS = 0
+        self.CLIP_SECONDS = 20
         self.DISPLAY = False
 
         # Encroachment parameters
