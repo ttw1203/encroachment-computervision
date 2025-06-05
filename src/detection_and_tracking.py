@@ -37,13 +37,13 @@ class DetectionTracker:
                 reid_weights=Path("mobilenetv2_x1_4_dukemtmcreid.pt"),
                 device=0 if device != "cpu" else device,
                 half=False,
-                max_age=300,
+                max_age=0,
             )
         else:  # ByteTrack
             self.tracker = sv.ByteTrack(
                 frame_rate=video_fps,
                 track_activation_threshold=confidence_threshold,
-                lost_track_buffer=300,
+                lost_track_buffer=0,
                 minimum_matching_threshold=confidence_threshold
             )
 
