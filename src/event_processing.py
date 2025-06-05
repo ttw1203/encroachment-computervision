@@ -292,12 +292,17 @@ class EnhancedTTCProcessor:
         FILTER 5: Vehicle Dimension Collision (AABB Overlap)
         Predicts future positions and checks for bounding box overlap.
         """
-        # Get vehicle dimensions
-        class_i = self.id_to_class.get(tracker_i, 'default')
-        class_j = self.id_to_class.get(tracker_j, 'default')
+        # Get vehicle dimensions with safe fallback
+        class_i = self.id_to_class.get(tracker_i, 'car')
+        class_j = self.id_to_class.get(tracker_j, 'car')
 
-        dims_i = self.vehicle_dimensions.get(class_i, self.vehicle_dimensions['default'])
-        dims_j = self.vehicle_dimensions.get(class_j, self.vehicle_dimensions['default'])
+        # Default dimensions fallback
+        default_dims = {'length': 4.0, 'width': 1.8}
+
+        dims_i = self.vehicle_dimensions.get(class_i,
+                                           self.vehicle_dimensions.get('default', default_dims))
+        dims_j = self.vehicle_dimensions.get(class_j,
+                                           self.vehicle_dimensions.get('default', default_dims))
 
         # Predict future centers at t_star
         center_i_future = (xi + vxi * t_star, yi + vyi * t_star)
