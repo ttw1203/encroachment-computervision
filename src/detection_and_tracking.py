@@ -211,7 +211,7 @@ def sv_to_boxmot(det: sv.Detections) -> np.ndarray:
                       det.class_id[:, None])).astype(np.float32)
 
 
-def filter_rider_persons(det: sv.Detections, iou_thr: float = 0.50) -> sv.Detections:
+def filter_rider_persons(det: sv.Detections, iou_thr: 0.4) -> sv.Detections:
     """Discard person boxes that belong to motorcycle/bicycle riders."""
     if len(det) == 0:
         return det
@@ -219,8 +219,8 @@ def filter_rider_persons(det: sv.Detections, iou_thr: float = 0.50) -> sv.Detect
     cls = det.class_id
     boxes = det.xyxy
 
-    person_idx = np.where(cls == 0)[0]  # 0 = person (COCO)
-    vehicle_idx = np.where(np.isin(cls, [1, 3]))[0]  # 1=bicycle, 3=motorcycle
+    person_idx = np.where(cls == 10)[0]  # 10 = person (rf-detr)
+    vehicle_idx = np.where(np.isin(cls, [4, 5, 8, 13, 14]))[0]  # vehicles that may have riders exposed (rf-detr)
 
     if person_idx.size == 0 or vehicle_idx.size == 0:
         return det
