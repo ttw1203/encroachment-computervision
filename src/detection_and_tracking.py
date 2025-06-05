@@ -125,7 +125,7 @@ class DetectionTracker:
             detections = self._detect_yolo(frame)
 
         # Apply detection smoothing
-        detections = self.smoother.update(detections)
+        detections = self.smoother.update_with_detections(detections)
 
         # Apply polygon zone filter if provided
         if polygon_zone:
