@@ -15,6 +15,15 @@ right_zone:
 segment_entry: [[2005, 1113], [2774, 1117]]   # upstream line
 segment_exit: [[2058, 1200], [3053, 1205]]   # downstream line
 
+# Double-line vehicle counting system
+counting_line_a:
+  - [714, 1062]
+  - [2847, 1062]
+
+counting_line_b:
+  - [0, 1362]
+  - [3537, 1317]
+
 # View transformation parameters
 source_points:
   - [1281, 971]

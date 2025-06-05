@@ -270,6 +270,11 @@ def parse_arguments() -> argparse.Namespace:
         help="Disable the translucent curb-lane overlays drawn by blend_zone()"
     )
     parser.add_argument(
+        "--no_annotations",
+        action="store_true",
+        help="Disable all visual annotations on the output video"
+    )
+    parser.add_argument(
         "--initial_velocity_frames",
         default=2,
         type=int,
@@ -375,6 +380,7 @@ def parse_arguments() -> argparse.Namespace:
         type=float,
         help="Minimum speed threshold in m/s below which velocity is set to 0 (default: 0.1)"
     )
+
 
     return parser.parse_args()
 
@@ -637,9 +643,6 @@ def main():
             for event in new_enc_events:
                 event['class_name'] = detector_tracker.get_class_name(event['class_id'])
 
-            # Draw zones
-            frame = zone_manager.draw_zones(frame, not args.no_blend_zones)
-
             # Update tracking state
             active_ids = set(detections.tracker_id.tolist() if len(detections) else [])
 
@@ -814,12 +817,16 @@ def main():
 
                 labels.append(label)
 
+            # Draw zones (moved before other annotations for proper layering)
+            if not args.no_annotations:
+                frame = zone_manager.draw_zones(frame, not args.no_blend_zones)
+
             # Draw segment lines if enabled
-            if args.segment_speed:
+            if args.segment_speed and not args.no_annotations:
                 frame = annotation_manager.draw_segment_lines(frame, ENTRY_LINE, EXIT_LINE)
 
             # Draw counting lines if advanced counting enabled
-            if advanced_counting_enabled:
+            if advanced_counting_enabled and not args.no_annotations:
                 frame = annotation_manager.draw_counting_lines(
                     frame,
                     config.COUNTING_LINE_A_COORDS,
@@ -828,20 +835,22 @@ def main():
                 )
 
             # Annotate frame
-            annotated_frame = annotation_manager.annotate_frame(
-                frame, detections, labels, future_coordinates, active_ids
-            )
+            if not args.no_annotations:
+                annotated_frame = annotation_manager.annotate_frame(
+                    frame, detections, labels, future_coordinates, active_ids
+                )
+            else:
+                annotated_frame = frame
 
             # Draw live vehicle counter if advanced counting enabled
-            if advanced_counting_enabled:
+            if advanced_counting_enabled and not args.no_annotations:
                 totals = double_line_counter.get_total_counts()
-                # Use the existing display method with simplified totals
                 annotated_frame = annotation_manager.draw_live_double_line_counts(
                     annotated_frame,
-                    totals["incoming"],  # Show total incoming as "A→B incoming"
-                    totals["outgoing"],  # Show total outgoing as "A→B outgoing"
-                    0,  # B→A incoming (not used in single-passage counting)
-                    0   # B→A outgoing (not used in single-passage counting)
+                    totals["incoming"],
+                    totals["outgoing"],
+                    0,
+                    0
                 )
 
             # Write frame
