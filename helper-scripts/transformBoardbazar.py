@@ -6,19 +6,19 @@ np.set_printoptions(precision=4,     # decimals shown
                     suppress=True,   # no scientific notation
                     floatmode='fixed')
 
-dx, dy = -0.0119, 54.9058        # ← + sign because we add to every point
+dx, dy = 0.0643, 99.7644      # ← + sign because we add to every point
 T = np.array([[1, 0, dx],
               [0, 1, dy],
               [0, 0, 1 ]], dtype=np.float32)
 
 # pixel corners of the calibration rectangle in the video
-SRC = np.float32([[1233, 1124], [2800, 1152], [3342,1490], [827,1444]])
+SRC = np.float32([[1399, 708], [2238, 696], [2573,1084], [1132,1105]])
 
 # the same four corners in world units (metres)
 TGT = np.float32([[0,0],
-                  [19,0],          # W = real-world width in m
-                  [19,11.45],          # H = real-world length in m
-                  [0,11.45]])
+                  [12,0],          # W = real-world width in m
+                  [12,22],          # H = real-world length in m
+                  [0,22]])
 
 H = cv2.getPerspectiveTransform(SRC, TGT)    # 3×3 homography
 
@@ -26,7 +26,7 @@ H_shifted = T @ H                 # matrix product; order matters
 
 
 
-pts_pix  = np.float32([[1666,783], [2222,793], [5574,2878], [-843,2761]])
+pts_pix  = np.float32([[1644, 346],[1932, 342],[3502, 2160],[420, 2160]])
 pts_m    = cv2.perspectiveTransform(pts_pix.reshape(-1,1,2), H) \
              .reshape(-1,2)        # → metres
 
@@ -37,7 +37,7 @@ pts_m_new = cv2.perspectiveTransform(
 
 print(pts_m_new)
 
-x1, y1 = 18.9069, 0.1505
+x1, y1 = 12.0498, 0.0387
 s      = -y1 / x1            # shear factor  ≈ 0.1058
 
 S = np.array([[1, 0, 0],     # Y' = Y + s·X

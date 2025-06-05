@@ -1,0 +1,42 @@
+# Encroachment Zone definitions (NOT NEEDED HERE)
+left_zone:
+  - [595, 375]
+  - [751, 366]
+  - [581, 1080]
+  - [-12, 1080]
+
+right_zone:
+  - [1009, 352]
+  - [1218, 341]
+  - [1920, 682]
+  - [1920, 998]
+
+# Vehicle counting line (pixel coordinates)
+counting_line:
+
+
+# Double-line vehicle counting system (NOT NEEDED HERE)
+counting_line_a:
+  - [493, 493]
+  - [1427, 442]
+
+counting_line_b:
+  - [283, 737]
+  - [1860, 653]
+
+# Segment lines
+segment_entry: [[681, 594], [939, 553]]   # upstream line
+segment_exit: [[645, 678], [1031, 616]]   # downstream line
+
+# View transformation parameters
+source_points:
+  - [704, 538]
+  - [969, 496]
+  - [2303, 839]
+  - [449, 1135]
+
+target_width: 26
+target_height: 70
+
+# 8 lanes * 3m + 2m median = 26m
+# Lamp post to lamp post = 17.5 m * 4 = 70 m

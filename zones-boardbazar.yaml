@@ -1,0 +1,44 @@
+# Encroachment Zone definitions
+left_zone:
+  - [0, 0]
+  - [0, 0]
+  - [0, 0]
+  - [0, 0]
+
+right_zone:
+  - [1865, 343]
+  - [2040, 340]
+  - [3611, 2160]
+  - [2472, 2160]
+
+# Vehicle counting line (pixel coordinates)
+counting_line:
+
+
+# Double-line vehicle counting system
+counting_line_a:
+  - [1178, 1036]
+  - [2515, 1017]
+
+counting_line_b:
+  - [857, 1513]
+  - [2917, 1482]
+
+# Segment lines
+segment_entry: [[1178, 1036], [2515, 1017]]   # upstream line
+segment_exit: [[857, 1513], [2917, 1482]]   # downstream line
+
+# View transformation parameters
+source_points:
+  - [1644, 346]
+  - [1932, 342]
+  - [3502, 2160]
+  - [420, 2160]
+
+target_width: 12
+target_height: 137.8
+
+#[[  0.1286  -0.0004]
+# [ 12.0498   0.0001]
+# [ 12.0642 138.1875]
+# [  0.0545 137.8885]]
