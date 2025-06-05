@@ -22,6 +22,9 @@ class DetectionTracker:
         self.confidence_threshold = confidence_threshold
         self.video_fps = video_fps
 
+        # Initialize detection smoother
+        self.smoother = sv.DetectionSmoother()
+
         # Initialize detection model
         if detector_model == "rf_detr":
             self._init_rf_detr(rf_detr_config)
@@ -120,6 +123,9 @@ class DetectionTracker:
             detections = self._detect_rf_detr(frame)
         else:  # YOLO
             detections = self._detect_yolo(frame)
+
+        # Apply detection smoothing
+        detections = self.smoother.update(detections)
 
         # Apply polygon zone filter if provided
         if polygon_zone:
