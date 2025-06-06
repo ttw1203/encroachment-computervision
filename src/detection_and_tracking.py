@@ -75,16 +75,16 @@ class DetectionTracker:
                 print(f"[RF-DETR] Loading pre-trained {rf_detr_config['variant']} model")
                 self.model = ModelClass(resolution=rf_detr_config['resolution'])
 
-            # Load class mapping
-            if rf_detr_config['model_type'] == 'custom':
-                print(f"[RF-DETR] Loading custom classes: {rf_detr_config['classes_path']}")
-                self.class_map = self._load_custom_classes(rf_detr_config['classes_path'])
-                print(f"[RF-DETR] Loaded {len(self.class_map)} custom classes")
-            else:
-                # Use COCO classes
-                from rfdetr.util.coco_classes import COCO_CLASSES
-                self.class_map = {str(i): name for i, name in enumerate(COCO_CLASSES)}
-                print(f"[RF-DETR] Using COCO classes ({len(COCO_CLASSES)} classes)")
+            # # Load class mapping
+            # if rf_detr_config['model_type'] == 'custom':
+            #     print(f"[RF-DETR] Loading custom classes: {rf_detr_config['classes_path']}")
+            #     self.class_map = self._load_custom_classes(rf_detr_config['classes_path'])
+            #     print(f"[RF-DETR] Loaded {len(self.class_map)} custom classes")
+            # else:
+            #     # Use COCO classes
+            #     from rfdetr.util.coco_classes import COCO_CLASSES
+            #     self.class_map = {str(i): name for i, name in enumerate(COCO_CLASSES)}
+            #     print(f"[RF-DETR] Using COCO classes ({len(COCO_CLASSES)} classes)")
 
             print(f"[RF-DETR] Model initialized successfully with resolution {rf_detr_config['resolution']}")
 
