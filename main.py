@@ -256,9 +256,9 @@ class DoubleLineVehicleCounter:
 
 
 def parse_arguments() -> argparse.Namespace:
-    """Parse command line arguments."""
+    """Parse command line arguments with enhanced TTC safeguard options."""
     parser = argparse.ArgumentParser(
-        description="Vehicle Speed Estimation using Ultralytics and Supervision"
+        description="Vehicle Speed Estimation with Enhanced TTC Safeguards"
     )
 
     parser.add_argument(
@@ -266,6 +266,32 @@ def parse_arguments() -> argparse.Namespace:
         default=".env.bns",
         help="Path to the environment configuration file (default: .env.bns)",
         type=str
+    )
+    # New TTC safeguard arguments
+    parser.add_argument(
+        "--initial_velocity_uncertainty",
+        type=float,
+        help="Initial velocity uncertainty for new tracks (m/s)"
+    )
+    parser.add_argument(
+        "--initial_position_uncertainty",
+        type=float,
+        help="Initial position uncertainty for new tracks (meters)"
+    )
+    parser.add_argument(
+        "--ttc_burn_in_frames",
+        type=int,
+        help="Number of frames to skip TTC for new tracks"
+    )
+    parser.add_argument(
+        "--ttc_min_velocity",
+        type=float,
+        help="Minimum velocity for TTC calculation (m/s)"
+    )
+    parser.add_argument(
+        "--ttc_min_track_confidence",
+        type=float,
+        help="Minimum track confidence for TTC calculation"
     )
     # Enhanced TTC arguments
     parser.add_argument(
@@ -421,16 +447,16 @@ def parse_arguments() -> argparse.Namespace:
         args.zones_file = config.ENC_ZONE_CONFIG
 
     # Override config with command line arguments if provided
-    if hasattr(args, 'ttc_threshold_on') and args.ttc_threshold_on:
-        os.environ['TTC_THRESHOLD_ON'] = str(args.ttc_threshold_on)
-    if hasattr(args, 'ttc_threshold_off') and args.ttc_threshold_off:
-        os.environ['TTC_THRESHOLD_OFF'] = str(args.ttc_threshold_off)
-    if hasattr(args, 'ttc_persistence_frames') and args.ttc_persistence_frames:
-        os.environ['TTC_PERSISTENCE_FRAMES'] = str(args.ttc_persistence_frames)
-    if hasattr(args, 'min_confidence_ttc') and args.min_confidence_ttc:
-        os.environ['MIN_CONFIDENCE_FOR_TTC'] = str(args.min_confidence_ttc)
-    if hasattr(args, 'enable_ttc_debug') and args.enable_ttc_debug:
-        os.environ['ENABLE_TTC_DEBUG'] = 'True'
+    if hasattr(args, 'initial_velocity_uncertainty') and args.initial_velocity_uncertainty:
+        os.environ['INITIAL_VELOCITY_UNCERTAINTY'] = str(args.initial_velocity_uncertainty)
+    if hasattr(args, 'initial_position_uncertainty') and args.initial_position_uncertainty:
+        os.environ['INITIAL_POSITION_UNCERTAINTY'] = str(args.initial_position_uncertainty)
+    if hasattr(args, 'ttc_burn_in_frames') and args.ttc_burn_in_frames:
+        os.environ['TTC_BURN_IN_FRAMES'] = str(args.ttc_burn_in_frames)
+    if hasattr(args, 'ttc_min_velocity') and args.ttc_min_velocity:
+        os.environ['TTC_MIN_VELOCITY'] = str(args.ttc_min_velocity)
+    if hasattr(args, 'ttc_min_track_confidence') and args.ttc_min_track_confidence:
+        os.environ['TTC_MIN_TRACK_CONFIDENCE'] = str(args.ttc_min_track_confidence)
 
     return args
 
@@ -461,23 +487,21 @@ def validate_detection_consistency(detections: sv.Detections, previous_detection
 
 
 def main():
-    """Main execution function."""
+    """Main execution function with enhanced TTC safeguards."""
     # Parse arguments
     args = parse_arguments()
 
     # Initialize configuration
-    config = Config()
-
-    # Initialize configuration with custom env file
     config = Config(env_path=args.env_file)
 
-    # Validate and print TTC configuration
-    if not config.validate_ttc_config():
-        print("[ERROR] Invalid TTC configuration. Please check your settings.")
+    # Validate both TTC and Kalman configurations
+    if not config.validate_ttc_config() or not config.validate_kalman_config():
+        print("[ERROR] Invalid configuration. Please check your settings.")
         return
 
     if config.ENABLE_TTC_DEBUG:
         config.print_ttc_config_summary()
+        config.print_kalman_config_summary()
 
     # Check advanced counting configuration
     advanced_counting_enabled = (args.advanced_counting or
@@ -661,7 +685,7 @@ def main():
     bar = tqdm(total=clip_frames, desc="Processing video", unit="frame")
     t0 = tm.time()
 
-    # Main processing loop
+    # Main processing loop with enhanced TTC safeguards
     frame_generator = sv.get_video_frames_generator(source_path=args.source_video_path)
 
     with sv.VideoSink(args.target_video_path, video_info) as sink:
@@ -712,23 +736,18 @@ def main():
             for tid in active_ids:
                 last_seen_frame[tid] = frame_idx
 
-            # Process each detection
+            # Process each detection with enhanced Kalman updates
             points = detections.get_anchors_coordinates(anchor=sv.Position.CENTER)
             points = view_transformer.transform_points(points=points).astype(np.float32)
 
-            # Double-line vehicle counting logic
-            crossing_detected = False
-
-            # Enhanced TTC calculation with all detection data
-            for det_idx, tracker_id in enumerate(detections.tracker_id):
-                class_id = int(detections.class_id[det_idx])
-                class_name = detector_tracker.get_class_name(class_id)
+            # Enhanced detection processing with confidence tracking
+            for det_idx, (tracker_id, [x, y]) in enumerate(zip(detections.tracker_id, points)):
+                # Get detection confidence for enhanced Kalman filter
                 confidence = float(detections.confidence[det_idx])
 
-            for det_idx, (tracker_id, [x, y]) in enumerate(zip(detections.tracker_id, points)):
-                # Update Kalman filter
+                # Update Kalman filter with confidence information
                 dt = 1 / video_info.fps
-                kf = kf_manager.update_or_create(tracker_id, x, y, dt, frame_idx)
+                kf = kf_manager.update_or_create(tracker_id, x, y, dt, frame_idx, confidence)
 
                 # Apply speed calibration with stability
                 kf_manager.apply_speed_calibration(tracker_id, calibration_func)
@@ -781,33 +800,41 @@ def main():
                 class_name = detector_tracker.get_class_name(class_id)
                 event_processor.id_to_class[tracker_id] = class_name
 
-                # Enhanced TTC calculation - now processes all pairs internally
-                ttc_event = event_processor.calculate_ttc(
-                    tracker_id,
-                    kf_manager.get_all_states(),
-                    last_seen_frame,
-                    frame_idx,
-                    MAX_AGE_FRAMES,
-                    args.ttc_threshold,
-                    detections=detections,  # Pass full detections
-                    detector_tracker=detector_tracker  # Pass detector for class lookup
-                )
-
-                if ttc_event:
-                    follower_class = event_processor.id_to_class.get(tracker_id, "unknown")
-                    leader_class = event_processor.id_to_class.get(ttc_event['other_id'], "unknown")
-
-                    event_processor.ttc_rows.append([
+                # Enhanced TTC calculation with safeguards
+                # Only calculate TTC for eligible trackers
+                if kf_manager.is_ttc_eligible(tracker_id, frame_idx):
+                    ttc_event = event_processor.calculate_ttc(
+                        tracker_id,
+                        kf_manager.get_all_states(),
+                        last_seen_frame,
                         frame_idx,
-                        tracker_id, follower_class,
-                        ttc_event['other_id'], leader_class,
-                        round(ttc_event['d_closest'], 2),
-                        round(ttc_event['rel_speed'], 2),
-                        round(ttc_event['t_star'], 2)
-                    ])
+                        MAX_AGE_FRAMES,
+                        args.ttc_threshold,
+                        detections=detections,
+                        detector_tracker=detector_tracker
+                    )
 
-                    ttc_labels[tracker_id] = [f"TTC->#{ttc_event['other_id']}:{ttc_event['t_star']:.1f}s"]
-                    ttc_event_count += 1
+                    if ttc_event:
+                        follower_class = event_processor.id_to_class.get(tracker_id, "unknown")
+                        leader_class = event_processor.id_to_class.get(ttc_event['other_id'], "unknown")
+
+                        event_processor.ttc_rows.append([
+                            frame_idx,
+                            tracker_id, follower_class,
+                            ttc_event['other_id'], leader_class,
+                            round(ttc_event['d_closest'], 2),
+                            round(ttc_event['rel_speed'], 2),
+                            round(ttc_event['t_star'], 2)
+                        ])
+
+                        ttc_labels[tracker_id] = [f"TTC->#{ttc_event['other_id']}:{ttc_event['t_star']:.1f}s"]
+                        ttc_event_count += 1
+                elif config.ENABLE_TTC_DEBUG:
+                    # Print debug info for ineligible trackers
+                    status = kf_manager.get_ttc_eligibility_status(tracker_id, frame_idx)
+                    if status.get("reason") == "burn_in_period":
+                        print(f"[TTC DEBUG] Tracker {tracker_id}: In burn-in period "
+                              f"({status['frames_since_creation']}/{status['burn_in_required']} frames)")
 
                 # Predict future positions using smoothed velocity
                 future_positions = kf_manager.predict_future_positions(
@@ -935,20 +962,29 @@ def main():
 
         if config.DISPLAY:
             cv2.destroyAllWindows()
-    # Enhanced CSV output with additional TTC metrics
-    if hasattr(event_processor, 'ttc_processor'):
-        # Export enhanced TTC events with additional metrics
-        enhanced_ttc_rows = event_processor.ttc_processor.export_events_for_csv()
-        if enhanced_ttc_rows:
-            io_manager.save_enhanced_ttc_events(enhanced_ttc_rows)
+        # Enhanced CSV output with TTC safeguard statistics
+        if hasattr(event_processor, 'ttc_processor'):
+            # Export enhanced TTC events with additional metrics
+            enhanced_ttc_rows = event_processor.ttc_processor.export_events_for_csv()
+            if enhanced_ttc_rows:
+                io_manager.save_enhanced_ttc_events(enhanced_ttc_rows)
 
-        # Print debug summary if enabled
-        if config.ENABLE_TTC_DEBUG:
-            debug_info = event_processor.ttc_processor.get_debug_info()
-            print(f"Enhanced TTC Debug Summary:")
-            print(f"  Active pairs: {debug_info.get('active_pairs', 0)}")
-            print(f"  Persistent pairs: {debug_info.get('persistent_pairs', 0)}")
-            print(f"  Total validated events: {debug_info.get('total_events', 0)}")
+            # Print debug summary if enabled
+            if config.ENABLE_TTC_DEBUG:
+                debug_info = event_processor.ttc_processor.get_debug_info()
+                print(f"Enhanced TTC Debug Summary:")
+                print(f"  Active pairs: {debug_info.get('active_pairs', 0)}")
+                print(f"  Persistent pairs: {debug_info.get('persistent_pairs', 0)}")
+                print(f"  Total validated events: {debug_info.get('total_events', 0)}")
+
+                # Print TTC safeguard statistics
+                total_trackers = len(kf_manager.get_all_states())
+                eligible_trackers = sum(1 for tid in kf_manager.get_all_states().keys()
+                                        if kf_manager.is_ttc_eligible(tid, frame_idx))
+                print(f"TTC Safeguard Statistics:")
+                print(f"  Total trackers: {total_trackers}")
+                print(f"  TTC-eligible trackers: {eligible_trackers}")
+                print(f"  Safeguard effectiveness: {((total_trackers - eligible_trackers) / max(total_trackers, 1)) * 100:.1f}% filtered")
     # Save results
     bar.close()
     print(f"Total TTC events logged: {ttc_event_count}")

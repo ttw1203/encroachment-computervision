@@ -1,15 +1,14 @@
-"""Enhanced configuration management with TTC processing parameters."""
+"""Enhanced configuration management with TTC safeguard parameters."""
 import os
 import json
 import yaml
-from pathlib import Path
 from typing import Tuple, Dict, Any, Optional
 import numpy as np
 from dotenv import load_dotenv
 
 
 class Config:
-    """Centralized configuration management with enhanced TTC parameters."""
+    """Centralized configuration management with enhanced TTC and Kalman parameters."""
 
     def __init__(self, env_path: str = ".env.mirpur"):
         """Initialize configuration from environment file."""
@@ -41,6 +40,33 @@ class Config:
         self.SPEED_CALIBRATION_MODEL_A = float(os.getenv("SPEED_CALIBRATION_MODEL_A", "1.0"))
         self.SPEED_CALIBRATION_MODEL_B = float(os.getenv("SPEED_CALIBRATION_MODEL_B", "0.0"))
         self.SPEED_CALIBRATION_POLY_COEFFS = os.getenv("SPEED_CALIBRATION_POLY_COEFFS", "0.0,1.0")
+
+        # ============================================
+        # ENHANCED KALMAN FILTER INITIALIZATION PARAMETERS
+        # ============================================
+
+        # Initial uncertainty parameters for new tracks
+        self.INITIAL_VELOCITY_UNCERTAINTY = float(os.getenv("INITIAL_VELOCITY_UNCERTAINTY", "5.0"))  # m/s
+        self.INITIAL_POSITION_UNCERTAINTY = float(os.getenv("INITIAL_POSITION_UNCERTAINTY", "0.5"))  # meters
+
+        # Velocity calculation parameters
+        self.INITIAL_VELOCITY_FRAMES = int(os.getenv("INITIAL_VELOCITY_FRAMES", "2"))  # 2 or 3 frames
+
+        # ============================================
+        # TTC SAFEGUARD PARAMETERS
+        # ============================================
+
+        # Burn-in period - skip TTC for new tracks
+        self.TTC_BURN_IN_FRAMES = int(os.getenv("TTC_BURN_IN_FRAMES", "10"))
+
+        # Velocity threshold for TTC calculation
+        self.TTC_MIN_VELOCITY = float(os.getenv("TTC_MIN_VELOCITY", "0.3"))  # m/s
+
+        # Track confidence threshold for TTC
+        self.TTC_MIN_TRACK_CONFIDENCE = float(os.getenv("TTC_MIN_TRACK_CONFIDENCE", "0.75"))
+
+        # Minimum detections required before TTC is enabled
+        self.TTC_MIN_DETECTIONS = int(os.getenv("TTC_MIN_DETECTIONS", "5"))
 
         # Speed stabilization parameters (unchanged)
         self.SPEED_SMOOTHING_WINDOW = int(os.getenv("SPEED_SMOOTHING_WINDOW", "5"))
@@ -88,6 +114,80 @@ class Config:
         self.DEFAULT_TTC_THRESHOLD = 1.0
         self.MAX_AGE_SECONDS = 0
         self.COLLISION_DISTANCE = 2.0
+
+    def get_kalman_config(self) -> Dict[str, Any]:
+        """Get Kalman filter configuration with TTC safeguards."""
+        return {
+            'speed_smoothing_window': self.SPEED_SMOOTHING_WINDOW,
+            'max_acceleration': self.MAX_ACCELERATION,
+            'min_speed_threshold': self.MIN_SPEED_THRESHOLD,
+            'initial_velocity_frames': self.INITIAL_VELOCITY_FRAMES,
+            'initial_velocity_uncertainty': self.INITIAL_VELOCITY_UNCERTAINTY,
+            'position_uncertainty': self.INITIAL_POSITION_UNCERTAINTY,
+            'ttc_burn_in_frames': self.TTC_BURN_IN_FRAMES,
+            'ttc_min_velocity': self.TTC_MIN_VELOCITY,
+            'ttc_min_confidence': self.TTC_MIN_TRACK_CONFIDENCE
+        }
+
+    def validate_kalman_config(self) -> bool:
+        """Validate Kalman filter and TTC safeguard configuration."""
+        errors = []
+
+        # Validate initialization parameters
+        if not (0.1 <= self.INITIAL_VELOCITY_UNCERTAINTY <= 20.0):
+            errors.append("INITIAL_VELOCITY_UNCERTAINTY should be between 0.1 and 20.0 m/s")
+
+        if not (0.01 <= self.INITIAL_POSITION_UNCERTAINTY <= 5.0):
+            errors.append("INITIAL_POSITION_UNCERTAINTY should be between 0.01 and 5.0 meters")
+
+        if self.INITIAL_VELOCITY_FRAMES not in [2, 3]:
+            errors.append("INITIAL_VELOCITY_FRAMES must be 2 or 3")
+
+        # Validate TTC safeguard parameters
+        if not (1 <= self.TTC_BURN_IN_FRAMES <= 60):
+            errors.append("TTC_BURN_IN_FRAMES should be between 1 and 60 frames")
+
+        if not (0.1 <= self.TTC_MIN_VELOCITY <= 5.0):
+            errors.append("TTC_MIN_VELOCITY should be between 0.1 and 5.0 m/s")
+
+        if not (0.0 <= self.TTC_MIN_TRACK_CONFIDENCE <= 1.0):
+            errors.append("TTC_MIN_TRACK_CONFIDENCE should be between 0.0 and 1.0")
+
+        if not (1 <= self.TTC_MIN_DETECTIONS <= 20):
+            errors.append("TTC_MIN_DETECTIONS should be between 1 and 20")
+
+        # Validate existing TTC parameters
+        if self.TTC_THRESHOLD_ON >= self.TTC_THRESHOLD_OFF:
+            errors.append("TTC_THRESHOLD_ON must be less than TTC_THRESHOLD_OFF")
+
+        if self.COLLISION_DISTANCE_ON >= self.COLLISION_DISTANCE_OFF:
+            errors.append("COLLISION_DISTANCE_ON must be less than COLLISION_DISTANCE_OFF")
+
+        if errors:
+            print("Kalman/TTC Configuration Errors:")
+            for error in errors:
+                print(f"  - {error}")
+            return False
+
+        return True
+
+    def print_kalman_config_summary(self) -> None:
+        """Print a summary of Kalman and TTC safeguard configuration."""
+        print("=== Enhanced Kalman Filter Configuration ===")
+        print(f"Initialization Parameters:")
+        print(f"  Velocity Uncertainty: {self.INITIAL_VELOCITY_UNCERTAINTY:.1f} m/s")
+        print(f"  Position Uncertainty: {self.INITIAL_POSITION_UNCERTAINTY:.1f} m")
+        print(f"  Initial Velocity Frames: {self.INITIAL_VELOCITY_FRAMES}")
+        print(f"TTC Safeguards:")
+        print(f"  Burn-in Period: {self.TTC_BURN_IN_FRAMES} frames")
+        print(f"  Min Velocity: {self.TTC_MIN_VELOCITY:.1f} m/s")
+        print(f"  Min Confidence: {self.TTC_MIN_TRACK_CONFIDENCE:.2f}")
+        print(f"  Min Detections: {self.TTC_MIN_DETECTIONS}")
+        print(f"Stability Parameters:")
+        print(f"  Speed Smoothing: {self.SPEED_SMOOTHING_WINDOW} frames")
+        print(f"  Max Acceleration: {self.MAX_ACCELERATION:.1f} m/s²")
+        print(f"  Min Speed Threshold: {self.MIN_SPEED_THRESHOLD:.1f} m/s")
+        print("=" * 45)
 
     def _load_vehicle_dimensions(self) -> Dict[str, Dict[str, float]]:
         """Load vehicle dimensions configuration from environment or use defaults."""
