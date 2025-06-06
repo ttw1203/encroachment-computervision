@@ -656,7 +656,8 @@ def main():
         video_fps=video_info.fps,
         collision_distance=config.COLLISION_DISTANCE,
         calibration_func=calibration_func,
-        ttc_config=ttc_config
+        ttc_config=ttc_config,
+        kalman_manager=kf_manager  # <- This was missing!
     )
 
     # IO manager using environment variable

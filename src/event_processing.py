@@ -75,10 +75,8 @@ class EnhancedTTCProcessor:
         self.debug_mode = config.get('ENABLE_TTC_DEBUG', False)
 
     def process_ttc_events(self, detections, kf_states: Dict, frame_idx: int,
-                          detector_tracker) -> List[TTCEvent]:
-        """
-        Main TTC processing pipeline with integrated Kalman safeguards.
-        """
+                           detector_tracker) -> List[TTCEvent]:
+        """Main TTC processing pipeline with integrated Kalman safeguards."""
         current_events = []
 
         # Update tracker activity
@@ -92,21 +90,27 @@ class EnhancedTTCProcessor:
         active_trackers = list(kf_states.keys())
 
         for i, tracker_i in enumerate(active_trackers):
-            for j, tracker_j in enumerate(active_trackers[i+1:], i+1):
+            for j, tracker_j in enumerate(active_trackers[i + 1:], i + 1):
                 self.total_event_attempts += 1
                 pair_key = (tracker_i, tracker_j)
 
-                # INTEGRATED SAFEGUARD: Check Kalman eligibility FIRST
-                kalman_eligible_i = (self.kalman_manager and
-                                   self.kalman_manager.is_ttc_eligible(tracker_i, frame_idx))
-                kalman_eligible_j = (self.kalman_manager and
-                                   self.kalman_manager.is_ttc_eligible(tracker_j, frame_idx))
+                # INTEGRATED SAFEGUARD: Check Kalman eligibility FIRST (with null check)
+                kalman_eligible_i = False
+                kalman_eligible_j = False
+
+                if self.kalman_manager is not None:
+                    kalman_eligible_i = self.kalman_manager.is_ttc_eligible(tracker_i, frame_idx)
+                    kalman_eligible_j = self.kalman_manager.is_ttc_eligible(tracker_j, frame_idx)
+                else:
+                    # Fallback: allow all trackers if no Kalman manager
+                    kalman_eligible_i = True
+                    kalman_eligible_j = True
 
                 # Skip TTC calculation if either tracker fails Kalman safeguards
                 if not (kalman_eligible_i and kalman_eligible_j):
                     self.kalman_filtered_events += 1
 
-                    if self.debug_mode:
+                    if self.debug_mode and self.kalman_manager is not None:
                         reasons = []
                         if not kalman_eligible_i:
                             status_i = self.kalman_manager.get_ttc_eligibility_status(tracker_i, frame_idx)
