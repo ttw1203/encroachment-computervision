@@ -22,7 +22,8 @@ class IOManager:
                 "relative_velocity_m_s",
                 "ttc_s",
                 "confidence_score",
-                "relative_angle_deg"
+                "relative_angle_deg",
+                "kalman_eligible"  # Added missing column
             ]
         )
         csv_file = self.output_dir / f"enhanced_ttc_events_{self.timestamp}.csv"
