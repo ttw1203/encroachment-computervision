@@ -343,6 +343,13 @@ class Config:
         if self.RF_DETR_MODEL_TYPE == 'custom':
             if not self.RF_DETR_MODEL_PATH:
                 raise ValueError("RF_DETR_MODEL_PATH must be specified for custom models")
+
+            if not self.RF_DETR_CUSTOM_CLASSES_PATH:
+                raise ValueError("RF_DETR_CUSTOM_CLASSES_PATH must be specified for custom models")
+
+            if not os.path.exists(self.RF_DETR_MODEL_PATH):
+                raise FileNotFoundError(f"RF-DETR model not found: {self.RF_DETR_MODEL_PATH}")
+
             if not os.path.exists(self.RF_DETR_CUSTOM_CLASSES_PATH):
                 raise FileNotFoundError(f"RF-DETR classes file not found: {self.RF_DETR_CUSTOM_CLASSES_PATH}")
 

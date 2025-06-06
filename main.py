@@ -521,6 +521,18 @@ def main():
     else:
         print("[INFO] Advanced vehicle counting disabled")
 
+    # Validate RF-DETR configuration if selected
+    if args.detector_model == "rf_detr":
+        try:
+            config.validate_rf_detr_config()
+            print(f"[RF-DETR] Using {config.RF_DETR_MODEL_TYPE} model with {config.RF_DETR_VARIANT} variant")
+            if config.RF_DETR_MODEL_TYPE == "custom":
+                print(f"[RF-DETR] Custom model: {config.RF_DETR_MODEL_PATH}")
+                print(f"[RF-DETR] Custom classes: {config.RF_DETR_CUSTOM_CLASSES_PATH}")
+        except (ValueError, FileNotFoundError) as e:
+            print(f"[ERROR] RF-DETR configuration error: {e}")
+            return
+
 
     # Set up logging
     logging.getLogger('ultralytics').setLevel(logging.CRITICAL)
