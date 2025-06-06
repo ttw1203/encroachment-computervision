@@ -51,6 +51,7 @@ class DetectionTracker:
         """Initialize YOLO model."""
         self.model = YOLO(model_weights)
         self.model.to(self.device)
+        self.class_map = None  # YOLO uses built-in names
 
     def _init_rf_detr(self, rf_detr_config: Dict[str, Any]):
         """Initialize RF-DETR model."""
@@ -74,12 +75,44 @@ class DetectionTracker:
                 print(f"[RF-DETR] Loading pre-trained {rf_detr_config['variant']} model")
                 self.model = ModelClass(resolution=rf_detr_config['resolution'])
 
+            # # Load class mapping
+            # if rf_detr_config['model_type'] == 'custom':
+            #     print(f"[RF-DETR] Loading custom classes: {rf_detr_config['classes_path']}")
+            #     self.class_map = self._load_custom_classes(rf_detr_config['classes_path'])
+            #     print(f"[RF-DETR] Loaded {len(self.class_map)} custom classes")
+            # else:
+            #     # Use COCO classes
+            #     from rfdetr.util.coco_classes import COCO_CLASSES
+            #     self.class_map = {str(i): name for i, name in enumerate(COCO_CLASSES)}
+            #     print(f"[RF-DETR] Using COCO classes ({len(COCO_CLASSES)} classes)")
+
             print(f"[RF-DETR] Model initialized successfully with resolution {rf_detr_config['resolution']}")
 
         except ImportError as e:
             raise ImportError(f"Failed to import RF-DETR. Please install with: pip install rfdetr>=1.0.0. Error: {e}")
         except Exception as e:
             raise RuntimeError(f"Failed to initialize RF-DETR model: {e}")
+
+    def _load_custom_classes(self, classes_path: str) -> Dict[str, str]:
+        """Load custom class mapping from JSON file."""
+        try:
+            with open(classes_path, 'r') as f:
+                class_map = json.load(f)
+
+            # Validate format and convert keys to strings
+            if not isinstance(class_map, dict):
+                raise ValueError("Custom classes file must contain a JSON object")
+
+            validated_map = {}
+            for k, v in class_map.items():
+                validated_map[str(k)] = str(v)
+
+            return validated_map
+
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in custom classes file: {e}")
+        except Exception as e:
+            raise ValueError(f"Error loading custom classes file: {e}")
 
     def detect_and_track(self, frame: np.ndarray,
                          polygon_zone: Optional[sv.PolygonZone] = None,
@@ -90,6 +123,8 @@ class DetectionTracker:
             detections = self._detect_rf_detr(frame)
         else:  # YOLO
             detections = self._detect_yolo(frame)
+
+
 
         # Apply polygon zone filter if provided
         if polygon_zone:
@@ -120,7 +155,6 @@ class DetectionTracker:
                 )
         else:  # ByteTrack
             detections = self.tracker.update_with_detections(detections=detections)
-
         # Apply detection smoothing
         detections = self.smoother.update_with_detections(detections)
         return detections
@@ -160,8 +194,10 @@ class DetectionTracker:
     def get_class_name(self, class_id: int) -> str:
         """Get class name for a given class ID."""
         if self.detector_model == "rf_detr":
-            # Use RF-DETR's built-in class names
-            return getattr(self.model, 'names', {}).get(class_id, f"class_{class_id}")
+            if self.class_map:
+                return self.class_map.get(str(class_id), f"unknown_{class_id}")
+            else:
+                return f"class_{class_id}"
         else:  # YOLO
             return self.model.names.get(class_id, f"unknown_{class_id}")
 
