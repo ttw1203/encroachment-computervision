@@ -2,9 +2,7 @@
 from typing import Dict, List, Tuple, Optional, Callable, Set
 import math
 import numpy as np
-from collections import defaultdict, deque
 from dataclasses import dataclass
-from src.geometry_and_transforms import line_side
 
 
 @dataclass

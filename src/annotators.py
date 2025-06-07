@@ -4,7 +4,6 @@ import cv2
 import numpy as np
 import supervision as sv
 import random
-from collections import defaultdict
 
 
 class AnnotationManager:
