@@ -1,4 +1,4 @@
-"""Enhanced Kalman filter with configurable initialization uncertainty and TTC safeguards."""
+"""Enhanced Kalman filter with configurable initialization uncertainty and TTC safeguards - OPTIMIZED."""
 from typing import Dict, List, Tuple, Optional, Callable
 import cv2
 import numpy as np
@@ -11,7 +11,7 @@ import logging
 class KalmanFilterManager:
     """Manages Kalman filters for multiple tracked objects with enhanced stability and TTC safeguards."""
 
-    def __init__(self, speed_smoothing_window: int = 5, max_acceleration: float = 5.0,
+    def __init__(self, speed_smoothing_window: int = 3, max_acceleration: float = 5.0,  # CHANGED: reduced from 5 to 3
                  min_speed_threshold: float = 0.1, initial_velocity_frames: int = 2,
                  initial_velocity_uncertainty: float = 5.0, position_uncertainty: float = 0.5,
                  ttc_burn_in_frames: int = 10, ttc_min_velocity: float = 0.3,
@@ -19,7 +19,7 @@ class KalmanFilterManager:
         """Initialize the Kalman filter manager with stability parameters and TTC safeguards.
 
         Args:
-            speed_smoothing_window: Number of frames to average for speed smoothing
+            speed_smoothing_window: Number of frames to average for speed smoothing (reduced to 3)
             max_acceleration: Maximum allowed acceleration in m/s²
             min_speed_threshold: Minimum speed threshold in m/s below which velocity is set to 0
             initial_velocity_frames: Number of frames to use for initial velocity calculation (2 or 3)
@@ -36,26 +36,36 @@ class KalmanFilterManager:
         self.speed_smoothing_window = speed_smoothing_window
         self.max_acceleration = max_acceleration
         self.min_speed_threshold = min_speed_threshold
+
+        # OPTIMIZED: Lazy initialization for direction_history - only create when needed
         self.direction_history: Dict[int, deque] = {}
+        self._direction_initialized: Dict[int, bool] = {}
 
         # Initial velocity calculation
         self.initial_positions: Dict[int, List[Tuple[float, float, int]]] = {}
         self.initial_velocity_frames = initial_velocity_frames
         self.initial_velocity_applied: Dict[int, bool] = {}
 
-        # NEW: Enhanced initialization parameters
-        self.initial_velocity_uncertainty = initial_velocity_uncertainty  # High uncertainty for new tracks
-        self.position_uncertainty = position_uncertainty  # Position uncertainty
+        # Enhanced initialization parameters
+        self.initial_velocity_uncertainty = initial_velocity_uncertainty
+        self.position_uncertainty = position_uncertainty
 
-        # NEW: TTC safeguard parameters
-        self.ttc_burn_in_frames = ttc_burn_in_frames  # Skip TTC for new tracks
-        self.ttc_min_velocity = ttc_min_velocity  # Minimum velocity for TTC
-        self.ttc_min_confidence = ttc_min_confidence  # Minimum confidence for TTC
+        # TTC safeguard parameters
+        self.ttc_burn_in_frames = ttc_burn_in_frames
+        self.ttc_min_velocity = ttc_min_velocity
+        self.ttc_min_confidence = ttc_min_confidence
 
-        # NEW: Track metadata for TTC safeguards
-        self.track_creation_frame: Dict[int, int] = {}  # Track when each tracker was created
-        self.track_confidence: Dict[int, float] = {}  # Track confidence scores
-        self.track_detection_count: Dict[int, int] = {}  # Number of detections per track
+        # Track metadata for TTC safeguards
+        self.track_creation_frame: Dict[int, int] = {}
+        self.track_confidence: Dict[int, float] = {}
+        self.track_detection_count: Dict[int, int] = {}
+
+        # OPTIMIZED: Cache for EMA calculations
+        self._ema_cache: Dict[int, float] = {}
+        self._ema_cache_dirty: Dict[int, bool] = {}
+
+        # OPTIMIZED: Batch cleanup queue
+        self._trackers_to_remove: List[int] = []
 
     def create_kalman_filter(self, dt: float, tracker_id: int) -> cv2.KalmanFilter:
         """Create a new Kalman filter with enhanced initialization uncertainty."""
@@ -114,14 +124,18 @@ class KalmanFilterManager:
             kf.statePost = np.array([[x], [y], [0.0], [0.0]], np.float32)
             self.kf_states[tracker_id] = kf
             self.speed_history[tracker_id] = deque(maxlen=self.speed_smoothing_window)
-            self.direction_history[tracker_id] = deque(maxlen=self.speed_smoothing_window)
+            # OPTIMIZED: Don't initialize direction_history yet - lazy init
+            self._direction_initialized[tracker_id] = False
             self.last_positions[tracker_id] = (x, y)
             self.initial_velocity_applied[tracker_id] = False
 
-            # NEW: Initialize track metadata
+            # Initialize track metadata
             self.track_creation_frame[tracker_id] = frame_idx
             self.track_confidence[tracker_id] = confidence
             self.track_detection_count[tracker_id] = 1
+
+            # OPTIMIZED: Initialize cache entries
+            self._ema_cache_dirty[tracker_id] = True
 
         else:
             kf = self.kf_states[tracker_id]
@@ -129,6 +143,9 @@ class KalmanFilterManager:
             # Update track metadata
             self.track_confidence[tracker_id] = confidence
             self.track_detection_count[tracker_id] += 1
+
+            # OPTIMIZED: Mark EMA cache as dirty
+            self._ema_cache_dirty[tracker_id] = True
 
             # Apply initial velocity if we have enough frames and haven't done so yet
             if not self.initial_velocity_applied[tracker_id]:
@@ -287,17 +304,20 @@ class KalmanFilterManager:
         # Initialize speed history
         self.speed_history[tracker_id].append(speed_init)
 
-        # Initialize direction history
+        # OPTIMIZED: Only initialize direction history if we have meaningful velocity
         if abs(vx_init) > 0.01 or abs(vy_init) > 0.01:
+            self._ensure_direction_history(tracker_id)
             initial_direction = math.atan2(vy_init, vx_init)
             self.direction_history[tracker_id].append(initial_direction)
 
-    # [Rest of the existing methods remain unchanged: _apply_velocity_constraints,
-    # _stabilize_direction, apply_speed_calibration, _calculate_ema_speed,
-    # get_smoothed_velocity, predict_future_positions, get_state, remove_tracker, get_all_states]
+    def _ensure_direction_history(self, tracker_id: int):
+        """Lazy initialization of direction history."""
+        if not self._direction_initialized.get(tracker_id, False):
+            self.direction_history[tracker_id] = deque(maxlen=self.speed_smoothing_window)
+            self._direction_initialized[tracker_id] = True
 
     def _apply_velocity_constraints(self, tracker_id: int, dt: float):
-        """Apply physical constraints to velocity to prevent unrealistic values."""
+        """Apply physical constraints to velocity to prevent unrealistic values - OPTIMIZED."""
         kf = self.kf_states[tracker_id]
         state = kf.statePost.flatten()
         x, y, vx, vy = state
@@ -308,7 +328,7 @@ class KalmanFilterManager:
         # Store in history for smoothing
         self.speed_history[tracker_id].append(current_speed)
 
-        # Apply minimum speed threshold
+        # OPTIMIZED: Early exit for low speeds - skip expensive processing
         if current_speed < self.min_speed_threshold:
             kf.statePost[2, 0] = 0.0
             kf.statePost[3, 0] = 0.0
@@ -333,35 +353,42 @@ class KalmanFilterManager:
                     kf.statePost[2, 0] = vx * scale
                     kf.statePost[3, 0] = vy * scale
 
-        # Apply direction stabilization
-        self._stabilize_direction(tracker_id)
+        # OPTIMIZED: Skip expensive direction stabilization for low-priority trackers
+        # Only apply if we have sufficient history and meaningful velocity
+        if (current_speed >= self.min_speed_threshold * 2 and
+            self._direction_initialized.get(tracker_id, False) and
+            len(self.direction_history.get(tracker_id, [])) >= 3):
+            self._stabilize_direction(tracker_id)
 
     def _stabilize_direction(self, tracker_id: int):
-        """Stabilize direction to prevent sudden reversals."""
+        """Stabilize direction to prevent sudden reversals - OPTIMIZED."""
         kf = self.kf_states[tracker_id]
         state = kf.statePost.flatten()
         x, y, vx, vy = state
 
         if abs(vx) > 0.01 or abs(vy) > 0.01:
             current_direction = math.atan2(vy, vx)
+
+            # OPTIMIZED: Ensure direction history exists before using
+            self._ensure_direction_history(tracker_id)
             self.direction_history[tracker_id].append(current_direction)
 
             if len(self.direction_history[tracker_id]) >= 3:
                 directions = list(self.direction_history[tracker_id])
-                angle_diffs = []
-                for i in range(1, len(directions)):
-                    diff = directions[i] - directions[i-1]
-                    diff = math.atan2(math.sin(diff), math.cos(diff))
-                    angle_diffs.append(abs(diff))
 
-                if angle_diffs[-1] > math.pi / 2:
+                # OPTIMIZED: Only check last angle difference instead of all
+                diff = directions[-1] - directions[-2]
+                diff = math.atan2(math.sin(diff), math.cos(diff))
+
+                if abs(diff) > math.pi / 2:
+                    # Use median of previous directions (excluding current)
                     median_direction = np.median(directions[:-1])
                     speed = math.hypot(vx, vy)
                     kf.statePost[2, 0] = speed * math.cos(median_direction)
                     kf.statePost[3, 0] = speed * math.sin(median_direction)
 
     def apply_speed_calibration(self, tracker_id: int, calibration_func: Callable[[float], float]) -> None:
-        """Apply speed calibration with smoothing to prevent fluctuations."""
+        """Apply speed calibration with smoothing to prevent fluctuations - OPTIMIZED."""
         if tracker_id not in self.kf_states:
             return
 
@@ -373,7 +400,7 @@ class KalmanFilterManager:
 
         if raw_speed > self.min_speed_threshold:
             if len(self.speed_history[tracker_id]) > 0:
-                smoothed_speed = self._calculate_ema_speed(tracker_id, raw_speed)
+                smoothed_speed = self._get_cached_ema_speed(tracker_id, raw_speed)
                 calibrated_speed = calibration_func(smoothed_speed)
 
                 if smoothed_speed > 0:
@@ -382,6 +409,23 @@ class KalmanFilterManager:
                     smoothed_scale = 1.0 + (scale_factor - 1.0) * damping_factor
                     kf.statePost[2, 0] = vx * smoothed_scale
                     kf.statePost[3, 0] = vy * smoothed_scale
+
+    def _get_cached_ema_speed(self, tracker_id: int, current_speed: float = None) -> float:
+        """Get cached EMA speed, recalculating only if dirty - OPTIMIZED."""
+        if self._ema_cache_dirty.get(tracker_id, True) or tracker_id not in self._ema_cache:
+            if current_speed is None:
+                # Get current speed from Kalman filter
+                if tracker_id in self.kf_states:
+                    state = self.kf_states[tracker_id].statePost.flatten()
+                    _, _, vx, vy = state
+                    current_speed = math.hypot(vx, vy)
+                else:
+                    current_speed = 0.0
+
+            self._ema_cache[tracker_id] = self._calculate_ema_speed(tracker_id, current_speed)
+            self._ema_cache_dirty[tracker_id] = False
+
+        return self._ema_cache[tracker_id]
 
     def _calculate_ema_speed(self, tracker_id: int, current_speed: float, alpha: float = 0.3) -> float:
         """Calculate exponential moving average of speed."""
@@ -410,7 +454,7 @@ class KalmanFilterManager:
 
         speed = math.hypot(vx, vy)
         if len(self.speed_history[tracker_id]) > 0:
-            display_speed = self._calculate_ema_speed(tracker_id, speed)
+            display_speed = self._get_cached_ema_speed(tracker_id, speed)
             if speed > 0 and not math.isnan(display_speed) and not math.isinf(display_speed):
                 scale = display_speed / speed
                 return vx * scale, vy * scale
@@ -418,22 +462,29 @@ class KalmanFilterManager:
         return vx, vy
 
     def predict_future_positions(self, tracker_id: int, delta_t: float = 0.5,
-                               num_predictions: int = 4) -> List[Tuple[float, float]]:
-        """Predict future positions using smoothed velocity."""
+                               num_predictions: int = 3) -> List[Tuple[float, float]]:  # CHANGED: reduced from 4 to 3
+        """Predict future positions using smoothed velocity - OPTIMIZED."""
         if tracker_id not in self.kf_states:
             return []
 
         kf = self.kf_states[tracker_id]
-        future_positions = []
-        current_state = deepcopy(kf.statePost.flatten())
+        current_state = kf.statePost.flatten()
         x, y, _, _ = current_state
 
         vx, vy = self.get_smoothed_velocity(tracker_id)
 
-        for step in range(1, num_predictions + 1):
-            t = step * delta_t
-            x_future = x + vx * t
-            y_future = y + vy * t
+        # OPTIMIZED: Early exit for stationary vehicles
+        if math.hypot(vx, vy) < self.min_speed_threshold:
+            return []
+
+        future_positions = []
+
+        # OPTIMIZED: Vectorized calculation for better performance
+        time_steps = np.arange(1, num_predictions + 1) * delta_t
+        x_futures = x + vx * time_steps
+        y_futures = y + vy * time_steps
+
+        for x_future, y_future in zip(x_futures, y_futures):
             future_positions.append((x_future, y_future))
 
         return future_positions
@@ -444,18 +495,37 @@ class KalmanFilterManager:
             return self.kf_states[tracker_id].statePost.flatten()
         return None
 
+    def queue_tracker_removal(self, tracker_id: int):
+        """Queue a tracker for batch removal - OPTIMIZED."""
+        if tracker_id not in self._trackers_to_remove:
+            self._trackers_to_remove.append(tracker_id)
+
+    def process_removal_queue(self):
+        """Process all queued tracker removals in batch - OPTIMIZED."""
+        for tracker_id in self._trackers_to_remove:
+            self._remove_tracker_internal(tracker_id)
+        self._trackers_to_remove.clear()
+
     def remove_tracker(self, tracker_id: int):
-        """Remove a tracker's Kalman filter and associated history."""
+        """Remove a tracker immediately (for backward compatibility)."""
+        self._remove_tracker_internal(tracker_id)
+
+    def _remove_tracker_internal(self, tracker_id: int):
+        """Internal method to remove a tracker's Kalman filter and associated history."""
         self.kf_states.pop(tracker_id, None)
         self.speed_history.pop(tracker_id, None)
         self.direction_history.pop(tracker_id, None)
+        self._direction_initialized.pop(tracker_id, None)
         self.last_positions.pop(tracker_id, None)
         self.initial_positions.pop(tracker_id, None)
         self.initial_velocity_applied.pop(tracker_id, None)
-        # Clean up new metadata
+        # Clean up metadata
         self.track_creation_frame.pop(tracker_id, None)
         self.track_confidence.pop(tracker_id, None)
         self.track_detection_count.pop(tracker_id, None)
+        # Clean up cache entries
+        self._ema_cache.pop(tracker_id, None)
+        self._ema_cache_dirty.pop(tracker_id, None)
 
     def get_all_states(self) -> Dict[int, cv2.KalmanFilter]:
         """Get all Kalman filter states."""
