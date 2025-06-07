@@ -23,8 +23,10 @@ class ZoneManager:
         self.left_zone = sv.PolygonZone(polygon=left_zone_poly)
         self.right_zone = sv.PolygonZone(polygon=right_zone_poly)
 
-        # State tracking
-        self.enc_state: Dict[int, Dict] = {}  # tracker_id → {t0, X0, Y0}
+        # Simplified state tracking - use lists instead of nested dicts
+        self.enc_tracker_ids: List[int] = []
+        self.enc_entry_frames: List[int] = []
+        self.enc_entry_positions: List[Tuple[float, float]] = []
         self.enc_events: List[Dict] = []
         self.enc_active_ids: Set[int] = set()
         self.enc_id_to_zone_side: Dict[int, str] = {}
@@ -32,6 +34,11 @@ class ZoneManager:
         # Initialize masks as None (created on demand)
         self._mask_left = None
         self._mask_right = None
+
+        # Cache for zone trigger results
+        self._cached_detections_hash = None
+        self._cached_trigger_results = None
+        self._zones_changed = True  # Track if zone state changed for drawing optimization
 
     def create_masks(self, frame_shape: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
         """Create zone masks for visualization."""
@@ -48,15 +55,43 @@ class ZoneManager:
 
         return self._mask_left, self._mask_right
 
-    def check_encroachment(self, detections: sv.Detections, frame_idx: int,
-                          kf_states: Dict) -> List[Dict]:
-        """Check for encroachment events and update state."""
-        # Find which detections are inside zones
+    def _hash_detections(self, detections: sv.Detections) -> int:
+        """Create a simple hash of detection positions for caching."""
+        if len(detections.xyxy) == 0:
+            return hash(())
+
+        # Use center points of bounding boxes for hash
+        centers = (detections.xyxy[:, 0] + detections.xyxy[:, 2]) / 2, \
+                 (detections.xyxy[:, 1] + detections.xyxy[:, 3]) / 2
+        return hash((tuple(centers[0]), tuple(centers[1])))
+
+    def _get_zone_triggers_cached(self, detections: sv.Detections) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Get zone trigger results with caching."""
+        det_hash = self._hash_detections(detections)
+
+        if (self._cached_detections_hash == det_hash and
+            self._cached_trigger_results is not None):
+            return self._cached_trigger_results
+
+        # Compute fresh results
         in_left = self.left_zone.trigger(detections)
         in_right = self.right_zone.trigger(detections)
         in_zone = in_left | in_right
 
+        # Cache results
+        self._cached_detections_hash = det_hash
+        self._cached_trigger_results = (in_left, in_right, in_zone)
+
+        return in_left, in_right, in_zone
+
+    def check_encroachment(self, detections: sv.Detections, frame_idx: int,
+                          kf_states: Dict) -> List[Dict]:
+        """Check for encroachment events and update state."""
+        # Use cached zone triggers
+        in_left, in_right, in_zone = self._get_zone_triggers_cached(detections)
+
         new_events = []
+        zones_changed_this_frame = False
 
         for det_idx, inside in enumerate(in_zone):
             tid = int(detections.tracker_id[det_idx])
@@ -69,13 +104,13 @@ class ZoneManager:
             Xi_m, Yi_m = state_vector[0], state_vector[1]
 
             if inside:
-                if tid not in self.enc_state:
-                    # First time entering zone
-                    self.enc_state[tid] = dict(t0=frame_idx, X0=Xi_m, Y0=Yi_m)
-                else:
-                    s = self.enc_state[tid]
-                    dt = (frame_idx - s['t0']) / self.video_fps
-                    dist = math.hypot(Xi_m - s['X0'], Yi_m - s['Y0'])
+                # Find existing entry or create new one
+                try:
+                    enc_idx = self.enc_tracker_ids.index(tid)
+                    # Existing entry - check encroachment conditions
+                    dt = (frame_idx - self.enc_entry_frames[enc_idx]) / self.video_fps
+                    X0, Y0 = self.enc_entry_positions[enc_idx]
+                    dist = math.hypot(Xi_m - X0, Yi_m - Y0)
 
                     # Check encroachment conditions
                     if (dt >= self.encroach_secs and
@@ -83,11 +118,12 @@ class ZoneManager:
                         tid not in self.enc_active_ids):
 
                         cls_id = int(detections.class_id[det_idx])
+                        zone_side = 'left' if in_left[det_idx] else 'right'
                         event = {
                             'tracker_id': tid,
                             'class_id': cls_id,
-                            'zone': 'left' if in_left[det_idx] else 'right',
-                            't_entry_s': s['t0'] / self.video_fps,
+                            'zone': zone_side,
+                            't_entry_s': self.enc_entry_frames[enc_idx] / self.video_fps,
                             't_flag_s': frame_idx / self.video_fps,
                             'd_move_m': round(dist, 2)
                         }
@@ -95,12 +131,33 @@ class ZoneManager:
                         new_events.append(event)
                         self.enc_events.append(event)
                         self.enc_active_ids.add(tid)
-                        self.enc_id_to_zone_side[tid] = event['zone']
+                        self.enc_id_to_zone_side[tid] = zone_side
+                        zones_changed_this_frame = True
+
+                except ValueError:
+                    # First time entering zone - add to tracking lists
+                    self.enc_tracker_ids.append(tid)
+                    self.enc_entry_frames.append(frame_idx)
+                    self.enc_entry_positions.append((Xi_m, Yi_m))
             else:
-                # Vehicle left zone
-                self.enc_state.pop(tid, None)
-                self.enc_active_ids.discard(tid)
-                self.enc_id_to_zone_side.pop(tid, None)
+                # Vehicle left zone - remove from tracking
+                try:
+                    enc_idx = self.enc_tracker_ids.index(tid)
+                    self.enc_tracker_ids.pop(enc_idx)
+                    self.enc_entry_frames.pop(enc_idx)
+                    self.enc_entry_positions.pop(enc_idx)
+                    zones_changed_this_frame = True
+                except ValueError:
+                    pass  # Not in tracking list
+
+                if tid in self.enc_active_ids:
+                    self.enc_active_ids.discard(tid)
+                    self.enc_id_to_zone_side.pop(tid, None)
+                    zones_changed_this_frame = True
+
+        # Update zones changed flag
+        if zones_changed_this_frame:
+            self._zones_changed = True
 
         return new_events
 
@@ -115,6 +172,10 @@ class ZoneManager:
 
     def draw_zones(self, frame: np.ndarray, blend: bool = True) -> np.ndarray:
         """Draw zones on frame with appropriate colors."""
+        # Skip blending when zones haven't changed
+        if blend and self._mask_left is not None and not self._zones_changed:
+            return frame
+
         if blend and (self._mask_left is not None):
             # Determine colors based on encroachment state
             left_enc = any(side == "left" for side in self.enc_id_to_zone_side.values())
@@ -124,6 +185,9 @@ class ZoneManager:
                            (0, 0, 255) if left_enc else (0, 255, 0))
             self.blend_zone(frame, self._mask_right,
                            (0, 0, 255) if right_enc else (0, 255, 0))
+
+            # Reset zones changed flag after drawing
+            self._zones_changed = False
 
         return frame
 
