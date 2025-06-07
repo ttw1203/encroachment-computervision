@@ -401,7 +401,6 @@ tomli==2.2.1
     # via yapf
 torch==2.7.1
     # via
-    #   -r requirements.in
     #   accelerate
     #   autodistill-grounding-dino
     #   boxmot
