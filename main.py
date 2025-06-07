@@ -367,7 +367,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--num_future_predictions",
-        default=config.DEFAULT_NUM_FUTURE_PREDICTIONS,
+        default=5,  # OPTIMIZED: Reduced from 10 to 5
         help="Number of future points to predict per vehicle",
         type=int
     )
@@ -422,9 +422,9 @@ def parse_arguments() -> argparse.Namespace:
     # New stability parameters
     parser.add_argument(
         "--speed_smoothing_window",
-        default=5,
+        default=3,  # OPTIMIZED: Reduced from 5 to 3
         type=int,
-        help="Number of frames to use for speed smoothing (default: 5)"
+        help="Number of frames to use for speed smoothing (default: 3)"
     )
     parser.add_argument(
         "--max_acceleration",
@@ -458,7 +458,7 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def validate_detection_consistency(detections: sv.Detections, previous_detections: dict[int, np.ndarray],
-                                 max_pixel_jump: float = 50.0) -> sv.Detections:
+                                 max_pixel_jump: float = 30.0) -> sv.Detections:  # OPTIMIZED: Reduced from 50.0 to 30.0
     """Validate detections to prevent ID switches and large position jumps."""
     if len(detections) == 0:
         return detections
@@ -714,6 +714,26 @@ def main():
                 args.iou_threshold
             )
 
+            # OPTIMIZATION: Early exit for empty detections
+            if len(detections) == 0:
+                # Still need to write frame and clean up
+                if not args.no_annotations:
+                    frame = zone_manager.draw_zones(frame, not args.no_blend_zones)
+                    if advanced_counting_enabled:
+                        frame = annotation_manager.draw_counting_lines(
+                            frame,
+                            config.COUNTING_LINE_A_COORDS,
+                            config.COUNTING_LINE_B_COORDS,
+                            current_frame_time_sec
+                        )
+                        totals = double_line_counter.get_total_counts()
+                        frame = annotation_manager.draw_live_double_line_counts(
+                            frame, totals["incoming"], totals["outgoing"], 0, 0
+                        )
+
+                sink.write_frame(frame)
+                continue
+
             # Filter riders if needed
             detections = filter_rider_persons(detections, iou_thr=0.30)
 
@@ -747,6 +767,10 @@ def main():
             # Process each detection with enhanced Kalman updates
             points = detections.get_anchors_coordinates(anchor=sv.Position.CENTER)
             points = view_transformer.transform_points(points=points).astype(np.float32)
+
+            # OPTIMIZATION: Skip expensive operations on some frames
+            run_ttc_calculations = frame_idx % 2 == 0  # Skip TTC every other frame
+            run_future_predictions = frame_idx % 3 == 0  # Skip future predictions every 3rd frame
 
             # Enhanced detection processing with confidence tracking
             for det_idx, (tracker_id, [x, y]) in enumerate(zip(detections.tracker_id, points)):
@@ -783,12 +807,11 @@ def main():
                     current_speed = math.hypot(Vx_smooth, Vy_smooth)
 
                     # Update double-line counter
-                    if double_line_counter.update_vehicle_position(
+                    crossing_detected = double_line_counter.update_vehicle_position(
                         tracker_id, class_name, current_point_px, current_frame_time_sec,
                         config.COUNTING_LINE_A_COORDS, config.COUNTING_LINE_B_COORDS,
                         current_speed, args.min_speed_threshold
-                    ):
-                        crossing_detected = True
+                    )
 
                 # Process segment speed if enabled
                 if args.segment_speed:
@@ -808,9 +831,8 @@ def main():
                 class_name = detector_tracker.get_class_name(class_id)
                 event_processor.id_to_class[tracker_id] = class_name
 
-                # Enhanced TTC calculation with safeguards
-                # Only calculate TTC for eligible trackers
-                if kf_manager.is_ttc_eligible(tracker_id, frame_idx):
+                # OPTIMIZATION: Enhanced TTC calculation with safeguards (skip some frames)
+                if run_ttc_calculations and kf_manager.is_ttc_eligible(tracker_id, frame_idx):
                     ttc_event = event_processor.calculate_ttc(
                         tracker_id,
                         kf_manager.get_all_states(),
@@ -837,28 +859,30 @@ def main():
 
                         ttc_labels[tracker_id] = [f"TTC->#{ttc_event['other_id']}:{ttc_event['t_star']:.1f}s"]
                         ttc_event_count += 1
-                elif config.ENABLE_TTC_DEBUG:
-                    # Print debug info for ineligible trackers
-                    status = kf_manager.get_ttc_eligibility_status(tracker_id, frame_idx)
-                    if status.get("reason") == "burn_in_period":
-                        print(f"[TTC DEBUG] Tracker {tracker_id}: In burn-in period "
-                              f"({status['frames_since_creation']}/{status['burn_in_required']} frames)")
+                elif config.ENABLE_TTC_DEBUG and not run_ttc_calculations:
+                    # Print debug info for skipped frames (reduced frequency)
+                    if frame_idx % 30 == 0:  # Only print every 30 frames to reduce spam
+                        status = kf_manager.get_ttc_eligibility_status(tracker_id, frame_idx)
+                        if status.get("reason") == "burn_in_period":
+                            print(f"[TTC DEBUG] Tracker {tracker_id}: In burn-in period "
+                                  f"({status['frames_since_creation']}/{status['burn_in_required']} frames)")
 
-                # Predict future positions using smoothed velocity
-                future_positions = kf_manager.predict_future_positions(
-                    tracker_id,
-                    args.future_prediction_interval,
-                    args.num_future_predictions
-                )
+                # OPTIMIZATION: Predict future positions using smoothed velocity (skip some frames)
+                if run_future_predictions:
+                    future_positions = kf_manager.predict_future_positions(
+                        tracker_id,
+                        args.future_prediction_interval,
+                        args.num_future_predictions
+                    )
 
-                # Transform to pixel coordinates
-                if future_positions:
-                    future_positions_array = np.array(future_positions, dtype=np.float32)
-                    predicted_pixels = view_transformer.inverse_transform_points(future_positions_array)
-                    future_coordinates[tracker_id] = predicted_pixels.tolist()
+                    # Transform to pixel coordinates
+                    if future_positions:
+                        future_positions_array = np.array(future_positions, dtype=np.float32)
+                        predicted_pixels = view_transformer.inverse_transform_points(future_positions_array)
+                        future_coordinates[tracker_id] = predicted_pixels.tolist()
 
             # Signal line crossings for visual feedback if advanced counting enabled
-            if advanced_counting_enabled and crossing_detected:
+            if advanced_counting_enabled and 'crossing_detected' in locals() and crossing_detected:
                 # Update annotation manager with crossing times
                 annotation_manager.signal_line_a_cross(double_line_counter.line_a_last_cross_time)
                 annotation_manager.signal_line_b_cross(double_line_counter.line_b_last_cross_time)
@@ -970,6 +994,7 @@ def main():
 
         if config.DISPLAY:
             cv2.destroyAllWindows()
+
         # Enhanced CSV output with TTC safeguard statistics
         if hasattr(event_processor, 'ttc_processor'):
             # Export enhanced TTC events with additional metrics
@@ -993,6 +1018,7 @@ def main():
                 print(f"  Total trackers: {total_trackers}")
                 print(f"  TTC-eligible trackers: {eligible_trackers}")
                 print(f"  Safeguard effectiveness: {((total_trackers - eligible_trackers) / max(total_trackers, 1)) * 100:.1f}% filtered")
+
     # Save results
     bar.close()
     print(f"Total TTC events logged: {ttc_event_count}")
