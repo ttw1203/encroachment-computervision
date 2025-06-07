@@ -34,7 +34,7 @@ class DetectionTracker:
         # Initialize tracker
         if tracker_type == "strongsort":
             self.tracker = StrongSort(
-                reid_weights=Path("mobilenetv2_x1_4_dukemtmcreid.pt"),
+                reid_weights=Path("/workspace/video_data/osnet_ain_x1_0_vehicle_reid.onnx"),
                 device=0 if device != "cpu" else device,
                 half=False,
                 max_age=0,
