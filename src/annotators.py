@@ -10,7 +10,7 @@ class AnnotationManager:
     """Manages visual annotations on video frames."""
 
     def __init__(self, thickness: int = 2, text_scale: float = 1.0,
-                 trace_length_seconds: float = 3.0, video_fps: float = 30.0):
+                 trace_length_seconds: float = 2.0, video_fps: float = 30.0):
         """Initialize annotation components."""
         self.thickness = thickness
         self.text_scale = text_scale
@@ -22,14 +22,24 @@ class AnnotationManager:
             text_thickness=thickness,
             text_position=sv.Position.TOP_LEFT,
         )
+        # Optimized trace length: 2 seconds instead of 3 for better performance
         self.trace_annotator = sv.TraceAnnotator(
             thickness=thickness,
             trace_length=int(video_fps * trace_length_seconds),
             position=sv.Position.CENTER,
         )
 
-        # Color cache for future trajectories
+        # Color cache for future trajectories - optimized to use pre-generated colors
         self.future_colors: Dict[int, Tuple[int, int, int]] = {}
+        self._color_pool = [
+            (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0),
+            (255, 0, 255), (0, 255, 255), (128, 0, 255), (255, 128, 0),
+            (0, 128, 255), (128, 255, 0), (255, 0, 128), (128, 128, 255)
+        ]
+        self._color_index = 0
+
+        # Performance optimization constants
+        self.MAX_TRAJECTORY_POINTS = 5  # Limit trajectory points for performance
 
         # Double-line counting visualization state
         self.line_a_last_cross_time_sec = -float('inf')
@@ -41,6 +51,16 @@ class AnnotationManager:
         self.line_a_crossed_color = (0, 255, 255)  # yellow
         self.line_b_default_color = (0, 255, 0)    # green
         self.line_b_crossed_color = (0, 255, 255)  # yellow
+
+        # Pre-computed mask overlays cache
+        self._mask_cache: Dict[str, np.ndarray] = {}
+
+    def _get_cached_color(self, track_id: int) -> Tuple[int, int, int]:
+        """Get cached color for track ID, using pre-generated color pool."""
+        if track_id not in self.future_colors:
+            self.future_colors[track_id] = self._color_pool[self._color_index % len(self._color_pool)]
+            self._color_index += 1
+        return self.future_colors[track_id]
 
     def signal_line_a_cross(self, current_time_seconds: float) -> None:
         """Signal that a vehicle has crossed Line A.
@@ -187,6 +207,27 @@ class AnnotationManager:
 
         return frame
 
+    def annotate_frame_lightweight(self, frame: np.ndarray, detections: sv.Detections,
+                                  labels: List[str]) -> np.ndarray:
+        """Lightweight annotation with only essential elements for performance.
+
+        Args:
+            frame: Current video frame
+            detections: Detection results
+            labels: Labels for detections
+
+        Returns:
+            Frame with lightweight annotations
+        """
+        # Only draw essential annotations - boxes and labels
+        annotated = self.box_annotator.annotate(
+            scene=frame, detections=detections
+        )
+        annotated = self.label_annotator.annotate(
+            scene=annotated, detections=detections, labels=labels
+        )
+        return annotated
+
     def annotate_frame(self, frame: np.ndarray, detections: sv.Detections,
                        labels: List[str], future_coordinates: Dict[int, List],
                        active_ids: set) -> np.ndarray:
@@ -216,7 +257,7 @@ class AnnotationManager:
     def draw_future_trajectories(self, frame: np.ndarray,
                                  future_coordinates: Dict[int, List],
                                  active_ids: set) -> np.ndarray:
-        """Draw future trajectory predictions as dots."""
+        """Draw future trajectory predictions as dots with optimized performance."""
         h, w = frame.shape[:2]
 
         for tid in list(future_coordinates.keys()):
@@ -224,23 +265,18 @@ class AnnotationManager:
             if tid not in active_ids:
                 continue
 
-            # Keep only in-bounds points
+            # Keep only in-bounds points and limit to MAX_TRAJECTORY_POINTS for performance
             in_bounds = [
                 (int(x), int(y))
                 for x, y in future_coordinates[tid]
                 if 0 <= x < w and 0 <= y < h
-            ]
+            ][:self.MAX_TRAJECTORY_POINTS]  # Limit points for performance
 
             if not in_bounds:
                 continue
 
-            # Get or create color for this track
-            colour = self.future_colors.setdefault(
-                tid,
-                (random.randint(0, 255),
-                 random.randint(0, 255),
-                 random.randint(0, 255))
-            )
+            # Get cached color for this track
+            colour = self._get_cached_color(tid)
 
             # Draw future points
             for cx, cy in in_bounds:
@@ -278,3 +314,19 @@ class AnnotationManager:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, EXIT_COLOR, 2, cv2.LINE_AA)
 
         return frame
+
+    def get_cached_mask_overlay(self, cache_key: str, frame_shape: Tuple[int, int],
+                               overlay_func) -> np.ndarray:
+        """Get or create cached mask overlay for zone visualization.
+
+        Args:
+            cache_key: Unique identifier for the overlay
+            frame_shape: Shape of the frame (height, width)
+            overlay_func: Function to generate the overlay if not cached
+
+        Returns:
+            Cached or newly generated overlay mask
+        """
+        if cache_key not in self._mask_cache:
+            self._mask_cache[cache_key] = overlay_func(frame_shape)
+        return self._mask_cache[cache_key]
