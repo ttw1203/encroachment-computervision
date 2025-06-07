@@ -42,6 +42,14 @@ class Config:
         self.SPEED_CALIBRATION_POLY_COEFFS = os.getenv("SPEED_CALIBRATION_POLY_COEFFS", "0.0,1.0")
 
         # ============================================
+        # PERFORMANCE MODE CONFIGURATION
+        # ============================================
+
+        # Performance optimization settings
+        self.PERFORMANCE_MODE = os.getenv("PERFORMANCE_MODE", "False").lower() == "true"
+        self.SKIP_EXPENSIVE_OPERATIONS = self.PERFORMANCE_MODE
+
+        # ============================================
         # ENHANCED KALMAN FILTER INITIALIZATION PARAMETERS
         # ============================================
 
@@ -56,8 +64,8 @@ class Config:
         # TTC SAFEGUARD PARAMETERS
         # ============================================
 
-        # Burn-in period - skip TTC for new tracks
-        self.TTC_BURN_IN_FRAMES = int(os.getenv("TTC_BURN_IN_FRAMES", "10"))
+        # Burn-in period - skip TTC for new tracks (optimized for performance)
+        self.TTC_BURN_IN_FRAMES = int(os.getenv("TTC_BURN_IN_FRAMES", "15"))
 
         # Velocity threshold for TTC calculation
         self.TTC_MIN_VELOCITY = float(os.getenv("TTC_MIN_VELOCITY", "0.3"))  # m/s
@@ -68,9 +76,9 @@ class Config:
         # Minimum detections required before TTC is enabled
         self.TTC_MIN_DETECTIONS = int(os.getenv("TTC_MIN_DETECTIONS", "5"))
 
-        # Speed stabilization parameters (unchanged)
-        self.SPEED_SMOOTHING_WINDOW = int(os.getenv("SPEED_SMOOTHING_WINDOW", "5"))
-        self.MAX_ACCELERATION = float(os.getenv("MAX_ACCELERATION", "5.0"))
+        # Speed stabilization parameters (optimized for performance)
+        self.SPEED_SMOOTHING_WINDOW = int(os.getenv("SPEED_SMOOTHING_WINDOW", "3"))
+        self.MAX_ACCELERATION = float(os.getenv("MAX_ACCELERATION", "8.0"))
         self.MIN_SPEED_THRESHOLD = float(os.getenv("MIN_SPEED_THRESHOLD", "0.1"))
 
         # ============================================
@@ -85,8 +93,8 @@ class Config:
         self.COLLISION_DISTANCE_ON = float(os.getenv("COLLISION_DISTANCE_ON", "1.5"))   # meters
         self.COLLISION_DISTANCE_OFF = float(os.getenv("COLLISION_DISTANCE_OFF", "2.5"))  # meters
 
-        # Persistence filtering - require sustained conditions
-        self.TTC_PERSISTENCE_FRAMES = int(os.getenv("TTC_PERSISTENCE_FRAMES", "3"))
+        # Persistence filtering - require sustained conditions (reduced sensitivity for performance)
+        self.TTC_PERSISTENCE_FRAMES = int(os.getenv("TTC_PERSISTENCE_FRAMES", "5"))
 
         # Confidence filtering - minimum detection confidence for TTC evaluation
         self.MIN_CONFIDENCE_FOR_TTC = float(os.getenv("MIN_CONFIDENCE_FOR_TTC", "0.4"))
@@ -126,7 +134,9 @@ class Config:
             'position_uncertainty': self.INITIAL_POSITION_UNCERTAINTY,
             'ttc_burn_in_frames': self.TTC_BURN_IN_FRAMES,
             'ttc_min_velocity': self.TTC_MIN_VELOCITY,
-            'ttc_min_confidence': self.TTC_MIN_TRACK_CONFIDENCE
+            'ttc_min_confidence': self.TTC_MIN_TRACK_CONFIDENCE,
+            'performance_mode': self.PERFORMANCE_MODE,
+            'skip_expensive_operations': self.SKIP_EXPENSIVE_OPERATIONS
         }
 
     def validate_kalman_config(self) -> bool:
@@ -174,6 +184,7 @@ class Config:
     def print_kalman_config_summary(self) -> None:
         """Print a summary of Kalman and TTC safeguard configuration."""
         print("=== Enhanced Kalman Filter Configuration ===")
+        print(f"Performance Mode: {'Enabled' if self.PERFORMANCE_MODE else 'Disabled'}")
         print(f"Initialization Parameters:")
         print(f"  Velocity Uncertainty: {self.INITIAL_VELOCITY_UNCERTAINTY:.1f} m/s")
         print(f"  Position Uncertainty: {self.INITIAL_POSITION_UNCERTAINTY:.1f} m")
@@ -183,7 +194,7 @@ class Config:
         print(f"  Min Velocity: {self.TTC_MIN_VELOCITY:.1f} m/s")
         print(f"  Min Confidence: {self.TTC_MIN_TRACK_CONFIDENCE:.2f}")
         print(f"  Min Detections: {self.TTC_MIN_DETECTIONS}")
-        print(f"Stability Parameters:")
+        print(f"Stability Parameters (Optimized):")
         print(f"  Speed Smoothing: {self.SPEED_SMOOTHING_WINDOW} frames")
         print(f"  Max Acceleration: {self.MAX_ACCELERATION:.1f} m/s²")
         print(f"  Min Speed Threshold: {self.MIN_SPEED_THRESHOLD:.1f} m/s")
@@ -237,6 +248,8 @@ class Config:
             'TTC_CLEANUP_TIMEOUT_FRAMES': self.TTC_CLEANUP_TIMEOUT_FRAMES,
             'ENABLE_TTC_DEBUG': self.ENABLE_TTC_DEBUG,
             'VEHICLE_DIMENSIONS': self.VEHICLE_DIMENSIONS,
+            'PERFORMANCE_MODE': self.PERFORMANCE_MODE,
+            'SKIP_EXPENSIVE_OPERATIONS': self.SKIP_EXPENSIVE_OPERATIONS,
             'video_fps': 30.0  # Will be updated with actual video FPS
         }
 
@@ -281,10 +294,11 @@ class Config:
     def print_ttc_config_summary(self) -> None:
         """Print a summary of TTC configuration for debugging."""
         print("=== Enhanced TTC Configuration ===")
+        print(f"Performance Mode: {'Enabled' if self.PERFORMANCE_MODE else 'Disabled'}")
         print(f"Hysteresis Thresholds:")
         print(f"  TTC ON/OFF: {self.TTC_THRESHOLD_ON:.1f}s / {self.TTC_THRESHOLD_OFF:.1f}s")
         print(f"  Distance ON/OFF: {self.COLLISION_DISTANCE_ON:.1f}m / {self.COLLISION_DISTANCE_OFF:.1f}m")
-        print(f"Filtering:")
+        print(f"Filtering (Optimized):")
         print(f"  Persistence: {self.TTC_PERSISTENCE_FRAMES} frames")
         print(f"  Min Confidence: {self.MIN_CONFIDENCE_FOR_TTC:.2f}")
         print(f"  Angle Range: {self.TTC_MIN_RELATIVE_ANGLE:.0f}° - {self.TTC_MAX_RELATIVE_ANGLE:.0f}°")
