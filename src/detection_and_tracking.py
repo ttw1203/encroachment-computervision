@@ -174,10 +174,11 @@ class DetectionTracker:
             # RF-DETR expects RGB format, OpenCV provides BGR
             # Following the official example: frame[:, :, ::-1] converts BGR to RGB
             frame_rgb = frame[:, :, ::-1].copy()
+            self.model.optimize_for_inference()
 
             # RF-DETR predict method handles NMS internally and returns supervision.Detections
             # The threshold parameter handles confidence filtering internally
-            detections = self.model.optimize_for_inference.predict(frame_rgb, threshold=self.confidence_threshold)
+            detections = self.model.predict(frame_rgb, threshold=self.confidence_threshold)
 
             return detections
 
