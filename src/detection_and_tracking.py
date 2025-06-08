@@ -1,6 +1,6 @@
 """Object detection and tracking functionality."""
 import json
-from typing import Optional, Dict, Tuple, Any
+from typing import Optional, Dict, Any
 import numpy as np
 from pathlib import Path
 from ultralytics import YOLO
@@ -34,13 +34,13 @@ class DetectionTracker:
         if tracker_type == "strongsort":
             self.tracker = StrongSort(
                 reid_weights=Path("/workspace/video_data/osnet_ain_x1_0_vehicle_reid.onnx"),
-                device=0 if device != "cpu" else device,
-                half=False,
+                device=0 if device != "cpu" else "cpu",  # Changed from 'device' to "cpu",
+                half=True,
                 max_age=0,
             )
         else:  # ByteTrack
             self.tracker = sv.ByteTrack(
-                frame_rate=video_fps,
+                frame_rate=int(video_fps),
                 track_activation_threshold=confidence_threshold,
                 lost_track_buffer=0,
                 minimum_matching_threshold=confidence_threshold
