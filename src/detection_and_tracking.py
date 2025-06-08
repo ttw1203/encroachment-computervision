@@ -22,7 +22,7 @@ class DetectionTracker:
         self.video_fps = video_fps
 
         # Initialize detection smoother
-        self.smoother = sv.DetectionsSmoother(length=0)
+        self.smoother = sv.DetectionsSmoother(0)
 
         # Initialize detection model
         if detector_model == "rf_detr":
