@@ -1,6 +1,5 @@
 """Object detection and tracking functionality."""
 import json
-import cv2
 from typing import Optional, Dict, Tuple, Any
 import numpy as np
 from pathlib import Path
