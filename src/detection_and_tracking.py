@@ -83,7 +83,7 @@ class DetectionTracker:
             else:
                 # Use COCO classes
                 from rfdetr.util.coco_classes import COCO_CLASSES
-                self.class_map = {str(i): name for i, name in enumerate(COCO_CLASSES)}
+                self.class_map = {i: name for i, name in enumerate(COCO_CLASSES)}
                 print(f"[RF-DETR] Using COCO classes ({len(COCO_CLASSES)} classes)")
 
             print(f"[RF-DETR] Model initialized successfully with resolution {rf_detr_config['resolution']}")
@@ -93,19 +93,19 @@ class DetectionTracker:
         except Exception as e:
             raise RuntimeError(f"Failed to initialize RF-DETR model: {e}")
 
-    def _load_custom_classes(self, classes_path: str) -> Dict[str, str]:
+    def _load_custom_classes(self, classes_path: str) -> Dict[int, str]:
         """Load custom class mapping from JSON file."""
         try:
             with open(classes_path, 'r') as f:
                 class_map = json.load(f)
 
-            # Validate format and convert keys to strings
+            # Validate format and convert keys to integers
             if not isinstance(class_map, dict):
                 raise ValueError("Custom classes file must contain a JSON object")
 
             validated_map = {}
             for k, v in class_map.items():
-                validated_map[str(k)] = str(v)
+                validated_map[int(k)] = str(v)
 
             return validated_map
 
@@ -122,16 +122,11 @@ class DetectionTracker:
         if self.detector_model == "rf_detr":
             detections = self._detect_rf_detr(frame)
         else:  # YOLO
-            detections = self._detect_yolo(frame)
-
-
+            detections = self._detect_yolo(frame, iou_threshold)
 
         # Apply polygon zone filter if provided
         if polygon_zone:
             detections = detections[polygon_zone.trigger(detections)]
-
-        # Apply NMS
-        detections = detections.with_nms(threshold=iou_threshold)
 
         # Apply tracking
         if self.tracker_type == "strongsort":
@@ -155,29 +150,34 @@ class DetectionTracker:
                 )
         else:  # ByteTrack
             detections = self.tracker.update_with_detections(detections=detections)
+
         # Apply detection smoothing
         detections = self.smoother.update_with_detections(detections)
         return detections
 
-    def _detect_yolo(self, frame: np.ndarray) -> sv.Detections:
-        """Run YOLO detection on frame."""
+    def _detect_yolo(self, frame: np.ndarray, iou_threshold: float) -> sv.Detections:
+        """Run YOLO detection on frame following ultralytics documentation."""
+        # YOLO inference - frame is already in BGR format (OpenCV default)
         result = self.model(frame)[0]
         detections = sv.Detections.from_ultralytics(result)
 
         # Filter by confidence
         detections = detections[detections.confidence > self.confidence_threshold]
 
+        # Apply NMS for YOLO (not included in ultralytics inference by default)
+        detections = detections.with_nms(threshold=iou_threshold)
+
         return detections
 
     def _detect_rf_detr(self, frame: np.ndarray) -> sv.Detections:
-        """Run RF-DETR detection on frame."""
+        """Run RF-DETR detection on frame following RF-DETR documentation."""
         try:
             # RF-DETR expects RGB format, OpenCV provides BGR
-            # Convert BGR to RGB for RF-DETR
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # Following the official example: frame[:, :, ::-1] converts BGR to RGB
+            frame_rgb = frame[:, :, ::-1]
 
-            # RF-DETR predict method directly returns supervision.Detections
-            # and handles confidence filtering internally via threshold parameter
+            # RF-DETR predict method handles NMS internally and returns supervision.Detections
+            # The threshold parameter handles confidence filtering internally
             detections = self.model.predict(frame_rgb, threshold=self.confidence_threshold)
 
             return detections
@@ -195,7 +195,7 @@ class DetectionTracker:
         """Get class name for a given class ID."""
         if self.detector_model == "rf_detr":
             if self.class_map:
-                return self.class_map.get(str(class_id), f"unknown_{class_id}")
+                return self.class_map.get(class_id, f"unknown_{class_id}")
             else:
                 return f"class_{class_id}"
         else:  # YOLO
@@ -211,7 +211,7 @@ def sv_to_boxmot(det: sv.Detections) -> np.ndarray:
                       det.class_id[:, None])).astype(np.float32)
 
 
-def filter_rider_persons(det: sv.Detections, iou_thr: 0.4) -> sv.Detections:
+def filter_rider_persons(det: sv.Detections, iou_thr: float = 0.4) -> sv.Detections:
     """Discard person boxes that belong to motorcycle/bicycle riders."""
     if len(det) == 0:
         return det
