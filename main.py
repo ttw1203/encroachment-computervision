@@ -681,6 +681,7 @@ def main():
     # State variables
     coordinates = defaultdict(lambda: deque(maxlen=video_info.fps))
     future_coordinates = defaultdict(list)
+    csv_rows = []
     ttc_labels = defaultdict(list)
     ttc_event_count = 0
 
@@ -752,10 +753,9 @@ def main():
                 kf_manager.get_all_states()
             )
 
-            # Update encroachment events with class names and add to buffer
+            # Update encroachment events with class names
             for event in new_enc_events:
                 event['class_name'] = detector_tracker.get_class_name(event['class_id'])
-                io_manager.add_encroachment_event(event)
 
             # Update tracking state
             active_ids = set(detections.tracker_id.tolist() if len(detections) else [])
@@ -848,16 +848,14 @@ def main():
                         follower_class = event_processor.id_to_class.get(tracker_id, "unknown")
                         leader_class = event_processor.id_to_class.get(ttc_event['other_id'], "unknown")
 
-                        io_manager.add_ttc_event(
+                        event_processor.ttc_rows.append([
                             frame_idx,
-                            tracker_id,
-                            follower_class,
-                            ttc_event['other_id'],
-                            leader_class,
+                            tracker_id, follower_class,
+                            ttc_event['other_id'], leader_class,
                             round(ttc_event['d_closest'], 2),
                             round(ttc_event['rel_speed'], 2),
                             round(ttc_event['t_star'], 2)
-                        )
+                        ])
 
                         ttc_labels[tracker_id] = [f"TTC->#{ttc_event['other_id']}:{ttc_event['t_star']:.1f}s"]
                         ttc_event_count += 1
@@ -925,13 +923,13 @@ def main():
 
                         # Only save metrics if speed is meaningful
                         if speed_ms >= args.min_speed_threshold:
-                            io_manager.add_vehicle_metric(
+                            csv_rows.append([
                                 frame_idx,
                                 int(tracker_id),
                                 class_name,
                                 confidence,
                                 round(speed_ms * 3.6, 2)  # Convert to km/h
-                            )
+                            ])
 
                         # Create speed label
                         if speed_ms < args.min_speed_threshold:
@@ -1001,20 +999,8 @@ def main():
         if hasattr(event_processor, 'ttc_processor'):
             # Export enhanced TTC events with additional metrics
             enhanced_ttc_rows = event_processor.ttc_processor.export_events_for_csv()
-            for event in enhanced_ttc_rows:
-                io_manager.add_enhanced_ttc_event(
-                    event[0],  # frame
-                    event[1],  # follower_id
-                    event[2],  # follower_class
-                    event[3],  # leader_id
-                    event[4],  # leader_class
-                    event[5],  # closing_distance_m
-                    event[6],  # relative_velocity_m_s
-                    event[7],  # ttc_s
-                    event[8],  # confidence_score
-                    event[9],  # relative_angle_deg
-                    event[10]  # kalman_eligible
-                )
+            if enhanced_ttc_rows:
+                io_manager.save_enhanced_ttc_events(enhanced_ttc_rows)
 
             # Print debug summary if enabled
             if config.ENABLE_TTC_DEBUG:
@@ -1037,20 +1023,13 @@ def main():
     bar.close()
     print(f"Total TTC events logged: {ttc_event_count}")
 
-    # Flush any remaining buffered data
-    io_manager.flush_all_buffers()
+    # Save all CSV files
+    io_manager.save_vehicle_metrics(csv_rows)
+    io_manager.save_ttc_events(event_processor.ttc_rows)
+    io_manager.save_encroachment_events(zone_manager.get_encroachment_events())
 
     if args.segment_speed and event_processor.segment_results:
-        for result in event_processor.segment_results:
-            io_manager.add_segment_speed(
-                result[0],  # vehicle_id
-                result[1],  # frame_entry
-                result[2],  # frame_exit
-                result[3],  # distance_m
-                result[4],  # time_s
-                result[5],  # speed_m_s
-                result[6]  # speed_km_h
-            )
+        io_manager.save_segment_speeds(event_processor.segment_results)
 
     # Save single-passage vehicle counting results if enabled
     if advanced_counting_enabled:
