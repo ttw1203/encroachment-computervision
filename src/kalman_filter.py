@@ -13,7 +13,7 @@ class KalmanFilterManager:
 
     def __init__(self, speed_smoothing_window: int = 5, max_acceleration: float = 5.0,
                  min_speed_threshold: float = 0.1, initial_velocity_frames: int = 2,
-                 initial_velocity_uncertainty: float = 5.0, position_uncertainty: float = 0.6,
+                 initial_velocity_uncertainty: float = 4.0, position_uncertainty: float = 0.5,
                  ttc_burn_in_frames: int = 10, ttc_min_velocity: float = 0.3,
                  ttc_min_confidence: float = 0.75):
         """Initialize the Kalman filter manager with stability parameters and TTC safeguards.
@@ -84,7 +84,7 @@ class KalmanFilterManager:
         ], np.float32)
 
         # Measurement noise (trust detections moderately)
-        kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 4.0
+        kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 3.0
 
         # CRITICAL: Set high initial covariance for velocity uncertainty
         kf.errorCovPost = np.array([
