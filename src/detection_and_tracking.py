@@ -14,24 +14,16 @@ class DetectionTracker:
 
     def __init__(self, model_weights: str, device: str, tracker_type: str = "strongsort",
                  confidence_threshold: float = 0.6, video_fps: float = 30.0,
-                 detector_model: str = "yolo", rf_detr_config: Optional[Dict[str, Any]] = None,
-                 enable_smoothing: bool = False):
+                 detector_model: str = "yolo", rf_detr_config: Optional[Dict[str, Any]] = None):
         """Initialize detection and tracking components."""
         self.detector_model = detector_model
         self.device = device
         self.tracker_type = tracker_type
         self.confidence_threshold = confidence_threshold
         self.video_fps = video_fps
-        self.enable_smoothing = enable_smoothing
 
-        # Initialize detection smoother only if enabled
-        if self.enable_smoothing:
-            self.smoother = sv.DetectionsSmoother()
-        else:
-            self.smoother = None
-
-        # Cache for class name lookups
-        self._class_name_cache = {}
+        # Initialize detection smoother
+        self.smoother = sv.DetectionsSmoother()
 
         # Initialize detection model
         if detector_model == "rf_detr":
@@ -132,22 +124,14 @@ class DetectionTracker:
         else:  # YOLO
             detections = self._detect_yolo(frame)
 
-        # Early exit if no detections
-        if len(detections) == 0:
-            return detections
 
-        # Apply polygon zone filter if provided (before expensive operations)
+
+        # Apply polygon zone filter if provided
         if polygon_zone:
             detections = detections[polygon_zone.trigger(detections)]
-            if len(detections) == 0:
-                return detections
 
         # Apply NMS
         detections = detections.with_nms(threshold=iou_threshold)
-
-        # Early exit if no detections after NMS
-        if len(detections) == 0:
-            return detections
 
         # Apply tracking
         if self.tracker_type == "strongsort":
@@ -171,11 +155,8 @@ class DetectionTracker:
                 )
         else:  # ByteTrack
             detections = self.tracker.update_with_detections(detections=detections)
-
-        # Apply detection smoothing only if enabled
-        if self.smoother is not None:
-            detections = self.smoother.update_with_detections(detections)
-
+        # Apply detection smoothing
+        detections = self.smoother.update_with_detections(detections)
         return detections
 
     def _detect_yolo(self, frame: np.ndarray) -> sv.Detections:
@@ -183,7 +164,7 @@ class DetectionTracker:
         result = self.model(frame)[0]
         detections = sv.Detections.from_ultralytics(result)
 
-        # Filter by confidence early to reduce processing overhead
+        # Filter by confidence
         detections = detections[detections.confidence > self.confidence_threshold]
 
         return detections
@@ -211,41 +192,27 @@ class DetectionTracker:
             )
 
     def get_class_name(self, class_id: int) -> str:
-        """Get class name for a given class ID with caching."""
-        # Check cache first
-        if class_id in self._class_name_cache:
-            return self._class_name_cache[class_id]
-
-        # Compute class name
+        """Get class name for a given class ID."""
         if self.detector_model == "rf_detr":
             if self.class_map:
-                class_name = self.class_map.get(str(class_id), f"unknown_{class_id}")
+                return self.class_map.get(str(class_id), f"unknown_{class_id}")
             else:
-                class_name = f"class_{class_id}"
+                return f"class_{class_id}"
         else:  # YOLO
-            class_name = self.model.names.get(class_id, f"unknown_{class_id}")
-
-        # Cache result
-        self._class_name_cache[class_id] = class_name
-        return class_name
+            return self.model.names.get(class_id, f"unknown_{class_id}")
 
 
 def sv_to_boxmot(det: sv.Detections) -> np.ndarray:
-    """Convert supervision detections to boxmot format with optimized array operations."""
+    """Convert supervision detections to boxmot format."""
     if not len(det):
         return np.empty((0, 6), dtype=np.float32)
-
-    # Pre-allocate result array for better performance
-    result = np.empty((len(det), 6), dtype=np.float32)
-    result[:, :4] = det.xyxy
-    result[:, 4] = det.confidence
-    result[:, 5] = det.class_id
-
-    return result
+    return np.hstack((det.xyxy,
+                      det.confidence[:, None],
+                      det.class_id[:, None])).astype(np.float32)
 
 
-def filter_rider_persons(det: sv.Detections, iou_thr: float = 0.4) -> sv.Detections:
-    """Discard person boxes that belong to motorcycle/bicycle riders with optimized filtering."""
+def filter_rider_persons(det: sv.Detections, iou_thr: 0.4) -> sv.Detections:
+    """Discard person boxes that belong to motorcycle/bicycle riders."""
     if len(det) == 0:
         return det
 
@@ -255,46 +222,24 @@ def filter_rider_persons(det: sv.Detections, iou_thr: float = 0.4) -> sv.Detecti
     person_idx = np.where(cls == 10)[0]  # 10 = person (rf-detr)
     vehicle_idx = np.where(np.isin(cls, [4, 5, 8, 13, 14]))[0]  # vehicles that may have riders exposed (rf-detr)
 
-    # Early exit if no persons or vehicles
     if person_idx.size == 0 or vehicle_idx.size == 0:
         return det
 
     keep = np.ones(len(det), dtype=bool)
 
-    # Pre-compute vehicle centers and bounds for efficiency
-    vehicle_boxes = boxes[vehicle_idx]
-    vehicle_centers_y = (vehicle_boxes[:, 1] + vehicle_boxes[:, 3]) / 2
-
-    for p_idx, p in enumerate(person_idx):
+    for p in person_idx:
         px1, py1, px2, py2 = boxes[p]
         pcx, pcy = (px1 + px2) / 2, (py1 + py2) / 2
 
-        # Quick spatial filtering: only check vehicles that could potentially contain the person
-        # Pre-filter vehicles by rough bounding box overlap
-        potentially_overlapping = (
-            (vehicle_boxes[:, 0] <= px2) & (vehicle_boxes[:, 2] >= px1) &
-            (vehicle_boxes[:, 1] <= py2) & (vehicle_boxes[:, 3] >= py1) &
-            (pcy < vehicle_centers_y)  # Person above vehicle center
-        )
-
-        if not np.any(potentially_overlapping):
-            continue
-
-        # Only compute expensive IoU for potentially overlapping vehicles
-        overlapping_vehicles = vehicle_idx[potentially_overlapping]
-
-        for v in overlapping_vehicles:
+        for v in vehicle_idx:
             vx1, vy1, vx2, vy2 = boxes[v]
+            v_cy = (vy1 + vy2) / 2
 
-            # Check if person center is inside vehicle box (fast check first)
+            iou_ok = _iou_xyxy(boxes[p], boxes[v]) > iou_thr
             centre_inside = (vx1 <= pcx <= vx2) and (vy1 <= pcy <= vy2)
+            above_ok = pcy < v_cy
 
-            if centre_inside:
-                keep[p] = False
-                break
-
-            # Only compute IoU if center check failed but spatial overlap exists
-            if _iou_xyxy(boxes[p], boxes[v]) > iou_thr:
+            if (iou_ok or centre_inside) and above_ok:
                 keep[p] = False
                 break
 
