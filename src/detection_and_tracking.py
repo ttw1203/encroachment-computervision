@@ -57,10 +57,10 @@ class DetectionTracker:
         try:
             # Import RF-DETR
             if rf_detr_config['variant'] == 'large':
-                from rfdetr import RFDETRLarge
+                from testingrfdetr import RFDETRLarge
                 ModelClass = RFDETRLarge
             else:
-                from rfdetr import RFDETRBase
+                from testingrfdetr import RFDETRBase
                 ModelClass = RFDETRBase
 
             # Initialize model with custom checkpoint if provided
@@ -81,7 +81,7 @@ class DetectionTracker:
                 print(f"[RF-DETR] Loaded {len(self.class_map)} custom classes")
             else:
                 # Use COCO classes
-                from rfdetr.util.coco_classes import COCO_CLASSES
+                from testingrfdetr.util.coco_classes import COCO_CLASSES
                 self.class_map = {i: name for i, name in enumerate(COCO_CLASSES)}
                 print(f"[RF-DETR] Using COCO classes ({len(COCO_CLASSES)} classes)")
 
@@ -174,7 +174,6 @@ class DetectionTracker:
             # RF-DETR expects RGB format, OpenCV provides BGR
             # Following the official example: frame[:, :, ::-1] converts BGR to RGB
             frame_rgb = frame[:, :, ::-1].copy()
-            self.model.optimize_for_inference()
 
             # RF-DETR predict method handles NMS internally and returns supervision.Detections
             # The threshold parameter handles confidence filtering internally
