@@ -493,6 +493,11 @@ def main():
         handlers=[logging.FileHandler('performance_log.txt')],
         format='%(asctime)s - %(message)s'
     )
+    # Parse arguments
+    args = parse_arguments()
+    # Initialize configuration
+    config = Config(env_path=args.env_file)
+
 
 
 
