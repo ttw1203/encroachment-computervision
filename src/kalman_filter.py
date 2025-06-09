@@ -84,7 +84,7 @@ class KalmanFilterManager:
         ], np.float32)
 
         # Measurement noise (trust detections moderately)
-        kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 5.0
+        kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 3.0
 
         # CRITICAL: Set high initial covariance for velocity uncertainty
         kf.errorCovPost = np.array([
