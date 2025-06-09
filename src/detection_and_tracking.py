@@ -6,7 +6,6 @@ from pathlib import Path
 from ultralytics import YOLO
 import supervision as sv
 from boxmot import StrongSort
-from PIL import Image
 
 
 class DetectionTracker:
@@ -263,14 +262,14 @@ class DetectionTracker:
             List of Detections objects, one per input frame
         """
         try:
-            # Convert all BGR NumPy frames to a list of RGB PIL Images,
-            # which is the expected format for batch prediction.
-            images = [Image.fromarray(frame[:, :, ::-1]) for frame in frames]
+            # Convert all frames to RGB format
+            frames_rgb = [frame[:, :, ::-1].copy() for frame in frames]
 
-            # Pass the list of PIL Images to the predict method
-            detections_list = self.model.predict(images, threshold=self.confidence_threshold)
+            # RF-DETR's predict method can handle batch input
+            # It returns a list of supervision.Detections objects
+            detections_list = self.model.predict(frames_rgb, threshold=self.confidence_threshold)
 
-            # Ensure the output is always a list, even for a single-image batch
+            # Ensure we return a list even if single detection returned
             if isinstance(detections_list, sv.Detections):
                 detections_list = [detections_list]
 
@@ -278,7 +277,7 @@ class DetectionTracker:
 
         except Exception as e:
             print(f"[RF-DETR] Batch detection error: {e}")
-            # On error, return a list of empty detections, one for each frame
+            # Return empty detections for each frame on error
             empty_detections = sv.Detections(
                 xyxy=np.empty((0, 4), dtype=float),
                 confidence=np.empty(0, dtype=float),
