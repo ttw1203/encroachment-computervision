@@ -441,6 +441,9 @@ def parse_arguments() -> argparse.Namespace:
 
     args = parser.parse_args()
 
+    # Now initialize config with the parsed env file
+    config = Config(env_path=args.env_file)
+
     # Override config with command line arguments if provided
     if hasattr(args, 'initial_velocity_uncertainty') and args.initial_velocity_uncertainty:
         os.environ['INITIAL_VELOCITY_UNCERTAINTY'] = str(args.initial_velocity_uncertainty)
@@ -490,10 +493,6 @@ def main():
         handlers=[logging.FileHandler('performance_log.txt')],
         format='%(asctime)s - %(message)s'
     )
-    # Initialize configuration
-    config = Config(env_path=args.env_file)
-    # Parse arguments
-    args = parse_arguments()
 
 
 
