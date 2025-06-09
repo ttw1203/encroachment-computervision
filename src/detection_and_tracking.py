@@ -1,6 +1,6 @@
-"""Object detection and tracking functionality."""
+"""Object detection and tracking functionality with batch inference support."""
 import json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import numpy as np
 from pathlib import Path
 from ultralytics import YOLO
@@ -9,7 +9,7 @@ from boxmot import StrongSort
 
 
 class DetectionTracker:
-    """Manages object detection and tracking."""
+    """Manages object detection and tracking with batch inference support."""
 
     def __init__(self, model_weights: str, device: str, tracker_type: str = "strongsort",
                  confidence_threshold: float = 0.5, video_fps: float = 30.0,
@@ -154,6 +154,68 @@ class DetectionTracker:
         detections = self.smoother.update_with_detections(detections)
         return detections
 
+    def detect_and_track_batch(self, frames: List[np.ndarray],
+                               polygon_zone: Optional[sv.PolygonZone] = None,
+                               iou_threshold: float = 0.5) -> List[sv.Detections]:
+        """Run detection and tracking on a batch of frames.
+
+        Args:
+            frames: List of frames to process
+            polygon_zone: Optional polygon zone for filtering detections
+            iou_threshold: IOU threshold for NMS
+
+        Returns:
+            List of Detections objects, one per input frame
+        """
+        # Run batch detection based on selected model
+        if self.detector_model == "rf_detr":
+            detections_list = self._detect_rf_detr_batch(frames)
+        else:  # YOLO
+            # YOLO batch processing - process sequentially for now
+            # (YOLO ultralytics supports batch but requires different approach)
+            detections_list = []
+            for frame in frames:
+                detections = self._detect_yolo(frame, iou_threshold)
+                detections_list.append(detections)
+
+        # Apply polygon zone filter if provided
+        if polygon_zone:
+            detections_list = [
+                detections[polygon_zone.trigger(detections)]
+                for detections in detections_list
+            ]
+
+        # Apply tracking to each detection (tracking is sequential by nature)
+        tracked_detections_list = []
+        for frame, detections in zip(frames, detections_list):
+            if self.tracker_type == "strongsort":
+                tracks = self.tracker.update(
+                    sv_to_boxmot(detections),
+                    frame,
+                )
+                if tracks.size:
+                    tracked_detections = sv.Detections(
+                        xyxy=tracks[:, :4],
+                        confidence=tracks[:, 5],
+                        class_id=tracks[:, 6].astype(int),
+                        tracker_id=tracks[:, 4].astype(int),
+                    )
+                else:
+                    tracked_detections = sv.Detections(
+                        xyxy=np.empty((0, 4), dtype=float),
+                        confidence=np.empty(0, dtype=float),
+                        class_id=np.empty(0, dtype=int),
+                        tracker_id=np.empty(0, dtype=int),
+                    )
+            else:  # ByteTrack
+                tracked_detections = self.tracker.update_with_detections(detections=detections)
+
+            # Apply detection smoothing
+            tracked_detections = self.smoother.update_with_detections(tracked_detections)
+            tracked_detections_list.append(tracked_detections)
+
+        return tracked_detections_list
+
     def _detect_yolo(self, frame: np.ndarray, iou_threshold: float) -> sv.Detections:
         """Run YOLO detection on frame following ultralytics documentation."""
         # YOLO inference - frame is already in BGR format (OpenCV default)
@@ -189,6 +251,39 @@ class DetectionTracker:
                 confidence=np.empty(0, dtype=float),
                 class_id=np.empty(0, dtype=int),
             )
+
+    def _detect_rf_detr_batch(self, frames: List[np.ndarray]) -> List[sv.Detections]:
+        """Run RF-DETR detection on a batch of frames.
+
+        Args:
+            frames: List of frames in BGR format (OpenCV default)
+
+        Returns:
+            List of Detections objects, one per input frame
+        """
+        try:
+            # Convert all frames to RGB format
+            frames_rgb = [frame[:, :, ::-1].copy() for frame in frames]
+
+            # RF-DETR's predict method can handle batch input
+            # It returns a list of supervision.Detections objects
+            detections_list = self.model.predict(frames_rgb, threshold=self.confidence_threshold)
+
+            # Ensure we return a list even if single detection returned
+            if isinstance(detections_list, sv.Detections):
+                detections_list = [detections_list]
+
+            return detections_list
+
+        except Exception as e:
+            print(f"[RF-DETR] Batch detection error: {e}")
+            # Return empty detections for each frame on error
+            empty_detections = sv.Detections(
+                xyxy=np.empty((0, 4), dtype=float),
+                confidence=np.empty(0, dtype=float),
+                class_id=np.empty(0, dtype=int),
+            )
+            return [empty_detections for _ in frames]
 
     def get_class_name(self, class_id: int) -> str:
         """Get class name for a given class ID."""

@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import supervision as sv
 import math
-from typing import Dict, Set, Optional
+from typing import Dict, Set, Optional, List, Tuple
 from dataclasses import dataclass
 # Import our modules
 from src.config import Config
@@ -454,6 +454,19 @@ def parse_arguments() -> tuple[argparse.Namespace, Config]:
         help="Enable TTC debug mode and visualizations"
     )
 
+    # Batch inference arguments
+    parser.add_argument(
+        "--batch_inference",
+        action="store_true",
+        help="Enable batch inference for RF-DETR (default: off)"
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=config.DEFAULT_BATCH_SIZE,
+        help="Batch size for inference when batch_inference is enabled"
+    )
+
     args = parser.parse_args(remaining_argv)
     return args, config
 
@@ -482,6 +495,319 @@ def validate_detection_consistency(detections: sv.Detections, previous_detection
     return detections[valid_mask]
 
 
+def process_frame_detections(
+    frame: np.ndarray,
+    detections: sv.Detections,
+    frame_idx: int,
+    args: argparse.Namespace,
+    config: Config,
+    # All the managers and processors
+    detector_tracker: DetectionTracker,
+    kf_manager: KalmanFilterManager,
+    zone_manager: ZoneManager,
+    view_transformer: ViewTransformer,
+    event_processor: EventProcessor,
+    annotation_manager: AnnotationManager,
+    double_line_counter: Optional[DoubleLineVehicleCounter],
+    # State variables
+    coordinates: Dict,
+    future_coordinates: Dict,
+    csv_rows: List,
+    ttc_labels: Dict,
+    last_seen_frame: Dict,
+    previous_detections: Dict,
+    ttc_event_count_ref: List[int],  # Pass as list to modify
+    # Other parameters
+    video_info: sv.VideoInfo,
+    ENTRY_LINE: Optional[np.ndarray],
+    EXIT_LINE: Optional[np.ndarray],
+    MAX_AGE_FRAMES: int,
+    current_frame_time_sec: float,
+    stage_times: Dict
+) -> Tuple[np.ndarray, bool]:
+    """Process detections for a single frame and return annotated frame.
+
+    This function encapsulates all the per-frame processing logic.
+
+    Returns:
+        Tuple of (annotated_frame, crossing_detected)
+    """
+    # Clear TTC labels for this frame
+    ttc_labels.clear()
+    crossing_detected = False
+
+    # Time filtering and validation
+    filtering_start_time = tm.time()
+
+    # Filter riders if needed
+    detections = filter_rider_persons(detections, iou_thr=0.30)
+
+    # Validate detection consistency
+    detections = validate_detection_consistency(detections, previous_detections)
+
+    filtering_end_time = tm.time()
+    stage_times['filtering_and_validation'] += (filtering_end_time - filtering_start_time)
+
+    # Update previous detections
+    if len(detections) > 0:
+        centers = detections.get_anchors_coordinates(sv.Position.CENTER)
+        for idx, tid in enumerate(detections.tracker_id):
+            previous_detections[tid] = centers[idx]
+
+    # Time encroachment check
+    encroachment_start_time = tm.time()
+
+    # Check encroachment
+    new_enc_events = zone_manager.check_encroachment(
+        detections,
+        frame_idx,
+        kf_manager.get_all_states()
+    )
+
+    # Update encroachment events with class names
+    for event in new_enc_events:
+        event['class_name'] = detector_tracker.get_class_name(event['class_id'])
+
+    encroachment_end_time = tm.time()
+    stage_times['encroachment_check'] += (encroachment_end_time - encroachment_start_time)
+
+    # Update tracking state
+    active_ids = set(detections.tracker_id.tolist() if len(detections) else [])
+
+    # Update last seen frame
+    for tid in active_ids:
+        last_seen_frame[tid] = frame_idx
+
+    # Time Kalman and event processing
+    kalman_start_time = tm.time()
+
+    # Process each detection with enhanced Kalman updates
+    points = detections.get_anchors_coordinates(anchor=sv.Position.CENTER)
+    points = view_transformer.transform_points(points=points).astype(np.float32)
+
+    # Enhanced detection processing with confidence tracking
+    for det_idx, (tracker_id, [x, y]) in enumerate(zip(detections.tracker_id, points)):
+        # Get detection confidence for enhanced Kalman filter
+        confidence = float(detections.confidence[det_idx])
+
+        # Update Kalman filter with confidence information
+        dt = 1 / video_info.fps
+        kf = kf_manager.update_or_create(tracker_id, x, y, dt, frame_idx, confidence)
+
+        # Apply speed calibration with stability
+        kf_manager.apply_speed_calibration(tracker_id, event_processor.calibration_func)
+
+        # Get current state (now with calibrated and stabilized velocity)
+        Xf, Yf, _, _ = kf.statePost.flatten()
+
+        # Get smoothed velocity for display
+        Vx_smooth, Vy_smooth = kf_manager.get_smoothed_velocity(tracker_id)
+
+        # Double-line vehicle counting logic
+        if double_line_counter is not None:
+            # Get current representative point in pixel coordinates (bottom-center of bounding box)
+            bbox = detections.xyxy[det_idx]
+            current_point_px = (
+                (bbox[0] + bbox[2]) / 2,  # center x
+                bbox[3]  # bottom y
+            )
+
+            # Get vehicle class
+            class_id = int(detections.class_id[det_idx])
+            class_name = detector_tracker.get_class_name(class_id)
+
+            # Get current speed
+            current_speed = math.hypot(Vx_smooth, Vy_smooth)
+
+            # Update double-line counter
+            if double_line_counter.update_vehicle_position(
+                tracker_id, class_name, current_point_px, current_frame_time_sec,
+                config.COUNTING_LINE_A_COORDS, config.COUNTING_LINE_B_COORDS,
+                current_speed, args.min_speed_threshold
+            ):
+                crossing_detected = True
+
+        # Process segment speed if enabled
+        if args.segment_speed and ENTRY_LINE is not None and EXIT_LINE is not None:
+            bbox = detections.xyxy[det_idx].astype(float)
+            p_cur = ((bbox[0] + bbox[2]) * 0.5,
+                     (bbox[1] + bbox[3]) * 0.5)
+
+            event_processor.process_segment_speed(
+                tracker_id, p_cur, (Xf, Yf), frame_idx,
+                ENTRY_LINE, EXIT_LINE
+            )
+
+        # Store coordinates for visualization
+        coordinates[tracker_id].append((x, y))
+
+        # Update class mapping
+        class_id = int(detections.class_id[det_idx])
+        class_name = detector_tracker.get_class_name(class_id)
+        event_processor.id_to_class[tracker_id] = class_name
+
+        # Enhanced TTC calculation with safeguards
+        # Only calculate TTC for eligible trackers
+        if kf_manager.is_ttc_eligible(tracker_id, frame_idx):
+            ttc_event = event_processor.calculate_ttc(
+                tracker_id,
+                kf_manager.get_all_states(),
+                last_seen_frame,
+                frame_idx,
+                MAX_AGE_FRAMES,
+                args.ttc_threshold,
+                detections=detections,
+                detector_tracker=detector_tracker
+            )
+
+            if ttc_event:
+                follower_class = event_processor.id_to_class.get(tracker_id, "unknown")
+                leader_class = event_processor.id_to_class.get(ttc_event['other_id'], "unknown")
+
+                event_processor.ttc_rows.append([
+                    frame_idx,
+                    tracker_id, follower_class,
+                    ttc_event['other_id'], leader_class,
+                    round(ttc_event['d_closest'], 2),
+                    round(ttc_event['rel_speed'], 2),
+                    round(ttc_event['t_star'], 2)
+                ])
+
+                ttc_labels[tracker_id] = [f"TTC->#{ttc_event['other_id']}:{ttc_event['t_star']:.1f}s"]
+                ttc_event_count_ref[0] += 1
+        elif config.ENABLE_TTC_DEBUG:
+            # Print debug info for ineligible trackers
+            status = kf_manager.get_ttc_eligibility_status(tracker_id, frame_idx)
+            if status.get("reason") == "burn_in_period":
+                print(f"[TTC DEBUG] Tracker {tracker_id}: In burn-in period "
+                      f"({status['frames_since_creation']}/{status['burn_in_required']} frames)")
+
+        # Predict future positions using smoothed velocity
+        future_positions = kf_manager.predict_future_positions(
+            tracker_id,
+            args.future_prediction_interval,
+            args.num_future_predictions
+        )
+
+        # Transform to pixel coordinates
+        if future_positions:
+            future_positions_array = np.array(future_positions, dtype=np.float32)
+            predicted_pixels = view_transformer.inverse_transform_points(future_positions_array)
+            future_coordinates[tracker_id] = predicted_pixels.tolist()
+
+    # Signal line crossings for visual feedback if advanced counting enabled
+    if double_line_counter is not None and crossing_detected:
+        # Update annotation manager with crossing times
+        annotation_manager.signal_line_a_cross(double_line_counter.line_a_last_cross_time)
+        annotation_manager.signal_line_b_cross(double_line_counter.line_b_last_cross_time)
+
+    # Clean up old tracks
+    to_remove = []
+    for tid in list(kf_manager.get_all_states().keys()):
+        last_seen = last_seen_frame.get(tid, None)
+        if last_seen is None or (frame_idx - last_seen) > MAX_AGE_FRAMES:
+            to_remove.append(tid)
+
+    for tid in to_remove:
+        kf_manager.remove_tracker(tid)
+        future_coordinates.pop(tid, None)
+        last_seen_frame.pop(tid, None)
+        previous_detections.pop(tid, None)
+
+    # Clean up double-line counter state if enabled
+    if double_line_counter is not None:
+        double_line_counter.cleanup_old_states(active_ids, current_frame_time_sec)
+
+    # Generate labels and save metrics using smoothed speeds
+    labels = []
+
+    for det_idx, tracker_id in enumerate(detections.tracker_id):
+        class_id = int(detections.class_id[det_idx])
+        class_name = detector_tracker.get_class_name(class_id)
+        confidence = float(detections.confidence[det_idx])
+
+        if args.display_basic_info:
+            # Basic info display mode
+            label = f"ID:{tracker_id} {class_name} ({confidence:.2f})"
+        else:
+            # Speed and TTC display mode
+            if tracker_id in kf_manager.get_all_states():
+                vx_smooth, vy_smooth = kf_manager.get_smoothed_velocity(tracker_id)
+                speed_ms = math.hypot(vx_smooth, vy_smooth)
+
+                # Only save metrics if speed is meaningful
+                if speed_ms >= args.min_speed_threshold:
+                    csv_rows.append([
+                        frame_idx,
+                        int(tracker_id),
+                        class_name,
+                        confidence,
+                        round(speed_ms * 3.6, 2)  # Convert to km/h
+                    ])
+
+                # Create speed label
+                if speed_ms < args.min_speed_threshold:
+                    label = f"#{tracker_id} 0 km/h"
+                else:
+                    label = f"#{tracker_id} {int(speed_ms * 3.6)} km/h"
+
+                # Add TTC info if available
+                if tracker_id in ttc_labels:
+                    label += " | " + ttc_labels[tracker_id][0]
+            else:
+                # Fallback for trackers without Kalman state
+                label = f"#{tracker_id}"
+
+        labels.append(label)
+
+    kalman_end_time = tm.time()
+    stage_times['kalman_and_event_processing'] += (kalman_end_time - kalman_start_time)
+
+    # Time annotation
+    annotation_start_time = tm.time()
+
+    # Draw zones (moved before other annotations for proper layering)
+    if not args.no_annotations:
+        frame = zone_manager.draw_zones(frame, not args.no_blend_zones)
+
+    # Draw segment lines if enabled
+    if args.segment_speed and not args.no_annotations and ENTRY_LINE is not None and EXIT_LINE is not None:
+        frame = annotation_manager.draw_segment_lines(frame, ENTRY_LINE, EXIT_LINE)
+
+    # Draw counting lines if advanced counting enabled
+    if double_line_counter is not None and not args.no_annotations:
+        frame = annotation_manager.draw_counting_lines(
+            frame,
+            config.COUNTING_LINE_A_COORDS,
+            config.COUNTING_LINE_B_COORDS,
+            current_frame_time_sec
+        )
+
+    # Annotate frame
+    if not args.no_annotations:
+        annotated_frame = annotation_manager.annotate_frame(
+            frame, detections, labels, future_coordinates, active_ids
+        )
+    else:
+        annotated_frame = frame
+
+    # Draw live vehicle counter if advanced counting enabled
+    if double_line_counter is not None and not args.no_annotations:
+        totals = double_line_counter.get_total_counts()
+        annotated_frame = annotation_manager.draw_live_double_line_counts(
+            annotated_frame,
+            totals["incoming"],
+            totals["outgoing"],
+            0,
+            0
+        )
+
+    annotation_end_time = tm.time()
+    stage_times['annotation'] += (annotation_end_time - annotation_start_time)
+
+    return annotated_frame, crossing_detected
+
+
 def main():
     """Main execution function with enhanced TTC safeguards and performance profiling."""
 
@@ -495,7 +821,6 @@ def main():
     # Parse arguments and load configuration from .env file
     args, config = parse_arguments()
 
-
     # Validate both TTC and Kalman configurations
     if not config.validate_ttc_config() or not config.validate_kalman_config():
         print("[ERROR] Invalid configuration. Please check your settings.")
@@ -504,6 +829,14 @@ def main():
     if config.ENABLE_TTC_DEBUG:
         config.print_ttc_config_summary()
         config.print_kalman_config_summary()
+
+    # Check batch inference configuration
+    if args.batch_inference:
+        if args.detector_model != "rf_detr":
+            print("[WARNING] Batch inference is only supported for RF-DETR. Disabling batch mode.")
+            args.batch_inference = False
+        else:
+            print(f"[INFO] Batch inference enabled with batch size: {args.batch_size}")
 
     # Check advanced counting configuration
     advanced_counting_enabled = (args.advanced_counting or
@@ -592,6 +925,7 @@ def main():
         return
 
     # Load segment configurations if needed
+    ENTRY_LINE, EXIT_LINE = (None, None)
     if args.segment_speed:
         ENTRY_LINE, EXIT_LINE = Config.load_segments(args.zones_file)
 
@@ -670,7 +1004,7 @@ def main():
         collision_distance=config.COLLISION_DISTANCE,
         calibration_func=calibration_func,
         ttc_config=ttc_config,
-        kalman_manager=kf_manager  # <- This was missing!
+        kalman_manager=kf_manager
     )
 
     # IO manager using environment variable
@@ -689,7 +1023,7 @@ def main():
     future_coordinates = defaultdict(list)
     csv_rows = []
     ttc_labels = defaultdict(list)
-    ttc_event_count = 0
+    ttc_event_count = [0]  # Use list to allow modification in function
 
     last_seen_frame = {}
     previous_detections = {}  # Store previous detection positions
@@ -707,323 +1041,177 @@ def main():
     frame_generator = sv.get_video_frames_generator(source_path=args.source_video_path)
 
     with sv.VideoSink(args.target_video_path, video_info) as sink:
-        for frame_idx, frame in enumerate(frame_generator):
-            if frame_idx >= clip_frames:
-                break
+        if args.batch_inference:
+            # Batch processing mode
+            frame_buffer = []
+            frame_indices_buffer = []
 
-            bar.update(1)
-            ttc_labels.clear()
-
-            # Start timing total loop time
-            loop_start_time = tm.time()
-
-            # Calculate current frame time for visual feedback
-            current_frame_time_sec = frame_idx / video_info.fps
-
-            # Time detection and tracking
-            detection_start_time = tm.time()
-
-            # Detect and track
-            detections = detector_tracker.detect_and_track(
-                frame,
-                polygon_zone,
-                args.iou_threshold
-            )
-
-            detection_end_time = tm.time()
-            stage_times['detection_and_tracking'] += (detection_end_time - detection_start_time)
-
-            # Time filtering and validation
-            filtering_start_time = tm.time()
-
-            # Filter riders if needed
-            detections = filter_rider_persons(detections, iou_thr=0.30)
-
-            # Validate detection consistency
-            detections = validate_detection_consistency(detections, previous_detections)
-
-            filtering_end_time = tm.time()
-            stage_times['filtering_and_validation'] += (filtering_end_time - filtering_start_time)
-
-            # Update previous detections
-            if len(detections) > 0:
-                centers = detections.get_anchors_coordinates(sv.Position.CENTER)
-                for idx, tid in enumerate(detections.tracker_id):
-                    previous_detections[tid] = centers[idx]
-
-            # Time encroachment check
-            encroachment_start_time = tm.time()
-
-            # Check encroachment
-            new_enc_events = zone_manager.check_encroachment(
-                detections,
-                frame_idx,
-                kf_manager.get_all_states()
-            )
-
-            # Update encroachment events with class names
-            for event in new_enc_events:
-                event['class_name'] = detector_tracker.get_class_name(event['class_id'])
-
-            encroachment_end_time = tm.time()
-            stage_times['encroachment_check'] += (encroachment_end_time - encroachment_start_time)
-
-            # Update tracking state
-            active_ids = set(detections.tracker_id.tolist() if len(detections) else [])
-
-            # Update last seen frame
-            for tid in active_ids:
-                last_seen_frame[tid] = frame_idx
-
-            # Time Kalman and event processing
-            kalman_start_time = tm.time()
-
-            # Process each detection with enhanced Kalman updates
-            points = detections.get_anchors_coordinates(anchor=sv.Position.CENTER)
-            points = view_transformer.transform_points(points=points).astype(np.float32)
-
-            # Enhanced detection processing with confidence tracking
-            for det_idx, (tracker_id, [x, y]) in enumerate(zip(detections.tracker_id, points)):
-                # Get detection confidence for enhanced Kalman filter
-                confidence = float(detections.confidence[det_idx])
-
-                # Update Kalman filter with confidence information
-                dt = 1 / video_info.fps
-                kf = kf_manager.update_or_create(tracker_id, x, y, dt, frame_idx, confidence)
-
-                # Apply speed calibration with stability
-                kf_manager.apply_speed_calibration(tracker_id, calibration_func)
-
-                # Get current state (now with calibrated and stabilized velocity)
-                Xf, Yf, _, _ = kf.statePost.flatten()
-
-                # Get smoothed velocity for display
-                Vx_smooth, Vy_smooth = kf_manager.get_smoothed_velocity(tracker_id)
-
-                # Double-line vehicle counting logic
-                if advanced_counting_enabled:
-                    # Get current representative point in pixel coordinates (bottom-center of bounding box)
-                    bbox = detections.xyxy[det_idx]
-                    current_point_px = (
-                        (bbox[0] + bbox[2]) / 2,  # center x
-                        bbox[3]  # bottom y
-                    )
-
-                    # Get vehicle class
-                    class_id = int(detections.class_id[det_idx])
-                    class_name = detector_tracker.get_class_name(class_id)
-
-                    # Get current speed
-                    current_speed = math.hypot(Vx_smooth, Vy_smooth)
-
-                    # Update double-line counter
-                    if double_line_counter.update_vehicle_position(
-                        tracker_id, class_name, current_point_px, current_frame_time_sec,
-                        config.COUNTING_LINE_A_COORDS, config.COUNTING_LINE_B_COORDS,
-                        current_speed, args.min_speed_threshold
-                    ):
-                        crossing_detected = True
-
-                # Process segment speed if enabled
-                if args.segment_speed:
-                    bbox = detections.xyxy[det_idx].astype(float)
-                    p_cur = ((bbox[0] + bbox[2]) * 0.5,
-                             (bbox[1] + bbox[3]) * 0.5)
-
-                    event_processor.process_segment_speed(
-                        tracker_id, p_cur, (Xf, Yf), frame_idx,
-                        ENTRY_LINE, EXIT_LINE
-                    )
-
-                # Store coordinates for visualization
-                coordinates[tracker_id].append((x, y))
-
-                # Update class mapping
-                class_id = int(detections.class_id[det_idx])
-                class_name = detector_tracker.get_class_name(class_id)
-                event_processor.id_to_class[tracker_id] = class_name
-
-                # Enhanced TTC calculation with safeguards
-                # Only calculate TTC for eligible trackers
-                if kf_manager.is_ttc_eligible(tracker_id, frame_idx):
-                    ttc_event = event_processor.calculate_ttc(
-                        tracker_id,
-                        kf_manager.get_all_states(),
-                        last_seen_frame,
-                        frame_idx,
-                        MAX_AGE_FRAMES,
-                        args.ttc_threshold,
-                        detections=detections,
-                        detector_tracker=detector_tracker
-                    )
-
-                    if ttc_event:
-                        follower_class = event_processor.id_to_class.get(tracker_id, "unknown")
-                        leader_class = event_processor.id_to_class.get(ttc_event['other_id'], "unknown")
-
-                        event_processor.ttc_rows.append([
-                            frame_idx,
-                            tracker_id, follower_class,
-                            ttc_event['other_id'], leader_class,
-                            round(ttc_event['d_closest'], 2),
-                            round(ttc_event['rel_speed'], 2),
-                            round(ttc_event['t_star'], 2)
-                        ])
-
-                        ttc_labels[tracker_id] = [f"TTC->#{ttc_event['other_id']}:{ttc_event['t_star']:.1f}s"]
-                        ttc_event_count += 1
-                elif config.ENABLE_TTC_DEBUG:
-                    # Print debug info for ineligible trackers
-                    status = kf_manager.get_ttc_eligibility_status(tracker_id, frame_idx)
-                    if status.get("reason") == "burn_in_period":
-                        print(f"[TTC DEBUG] Tracker {tracker_id}: In burn-in period "
-                              f"({status['frames_since_creation']}/{status['burn_in_required']} frames)")
-
-                # Predict future positions using smoothed velocity
-                future_positions = kf_manager.predict_future_positions(
-                    tracker_id,
-                    args.future_prediction_interval,
-                    args.num_future_predictions
-                )
-
-                # Transform to pixel coordinates
-                if future_positions:
-                    future_positions_array = np.array(future_positions, dtype=np.float32)
-                    predicted_pixels = view_transformer.inverse_transform_points(future_positions_array)
-                    future_coordinates[tracker_id] = predicted_pixels.tolist()
-
-            # Signal line crossings for visual feedback if advanced counting enabled
-            if advanced_counting_enabled and crossing_detected:
-                # Update annotation manager with crossing times
-                annotation_manager.signal_line_a_cross(double_line_counter.line_a_last_cross_time)
-                annotation_manager.signal_line_b_cross(double_line_counter.line_b_last_cross_time)
-
-            # Clean up old tracks
-            to_remove = []
-            for tid in list(kf_manager.get_all_states().keys()):
-                last_seen = last_seen_frame.get(tid, None)
-                if last_seen is None or (frame_idx - last_seen) > MAX_AGE_FRAMES:
-                    to_remove.append(tid)
-
-            for tid in to_remove:
-                kf_manager.remove_tracker(tid)
-                future_coordinates.pop(tid, None)
-                last_seen_frame.pop(tid, None)
-                previous_detections.pop(tid, None)
-
-            # Clean up double-line counter state if enabled
-            if advanced_counting_enabled:
-                double_line_counter.cleanup_old_states(active_ids, current_frame_time_sec)
-
-            # Generate labels and save metrics using smoothed speeds
-            labels = []
-
-            for det_idx, tracker_id in enumerate(detections.tracker_id):
-                class_id = int(detections.class_id[det_idx])
-                class_name = detector_tracker.get_class_name(class_id)
-                confidence = float(detections.confidence[det_idx])
-
-                if args.display_basic_info:
-                    # Basic info display mode
-                    label = f"ID:{tracker_id} {class_name} ({confidence:.2f})"
-                else:
-                    # Speed and TTC display mode
-                    if tracker_id in kf_manager.get_all_states():
-                        vx_smooth, vy_smooth = kf_manager.get_smoothed_velocity(tracker_id)
-                        speed_ms = math.hypot(vx_smooth, vy_smooth)
-
-                        # Only save metrics if speed is meaningful
-                        if speed_ms >= args.min_speed_threshold:
-                            csv_rows.append([
-                                frame_idx,
-                                int(tracker_id),
-                                class_name,
-                                confidence,
-                                round(speed_ms * 3.6, 2)  # Convert to km/h
-                            ])
-
-                        # Create speed label
-                        if speed_ms < args.min_speed_threshold:
-                            label = f"#{tracker_id} 0 km/h"
-                        else:
-                            label = f"#{tracker_id} {int(speed_ms * 3.6)} km/h"
-
-                        # Add TTC info if available
-                        if tracker_id in ttc_labels:
-                            label += " | " + ttc_labels[tracker_id][0]
-                    else:
-                        # Fallback for trackers without Kalman state
-                        label = f"#{tracker_id}"
-
-                labels.append(label)
-
-            kalman_end_time = tm.time()
-            stage_times['kalman_and_event_processing'] += (kalman_end_time - kalman_start_time)
-
-            # Time annotation
-            annotation_start_time = tm.time()
-
-            # Draw zones (moved before other annotations for proper layering)
-            if not args.no_annotations:
-                frame = zone_manager.draw_zones(frame, not args.no_blend_zones)
-
-            # Draw segment lines if enabled
-            if args.segment_speed and not args.no_annotations:
-                frame = annotation_manager.draw_segment_lines(frame, ENTRY_LINE, EXIT_LINE)
-
-            # Draw counting lines if advanced counting enabled
-            if advanced_counting_enabled and not args.no_annotations:
-                frame = annotation_manager.draw_counting_lines(
-                    frame,
-                    config.COUNTING_LINE_A_COORDS,
-                    config.COUNTING_LINE_B_COORDS,
-                    current_frame_time_sec
-                )
-
-            # Annotate frame
-            if not args.no_annotations:
-                annotated_frame = annotation_manager.annotate_frame(
-                    frame, detections, labels, future_coordinates, active_ids
-                )
-            else:
-                annotated_frame = frame
-
-            # Draw live vehicle counter if advanced counting enabled
-            if advanced_counting_enabled and not args.no_annotations:
-                totals = double_line_counter.get_total_counts()
-                annotated_frame = annotation_manager.draw_live_double_line_counts(
-                    annotated_frame,
-                    totals["incoming"],
-                    totals["outgoing"],
-                    0,
-                    0
-                )
-
-            annotation_end_time = tm.time()
-            stage_times['annotation'] += (annotation_end_time - annotation_start_time)
-
-            # Time frame sink
-            frame_sink_start_time = tm.time()
-
-            # Write frame
-            sink.write_frame(annotated_frame)
-
-            frame_sink_end_time = tm.time()
-            stage_times['frame_sink'] += (frame_sink_end_time - frame_sink_start_time)
-
-            # Calculate total loop time
-            loop_end_time = tm.time()
-            stage_times['total_loop_time'] += (loop_end_time - loop_start_time)
-
-            # Increment frame count for profiling
-            frame_count_for_profiling += 1
-
-            # Display if enabled
-            if config.DISPLAY:
-                display_frame = cv2.resize(annotated_frame, (1920, 1080))
-                cv2.imshow("Preview", display_frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+            for frame_idx, frame in enumerate(frame_generator):
+                if frame_idx >= clip_frames:
                     break
+
+                # Add frame to buffer
+                frame_buffer.append(frame)
+                frame_indices_buffer.append(frame_idx)
+
+                # Process batch when full or at end of video
+                if len(frame_buffer) == args.batch_size or frame_idx == clip_frames - 1:
+                    # Time batch detection and tracking
+                    detection_start_time = tm.time()
+
+                    # Detect and track batch
+                    detections_batch = detector_tracker.detect_and_track_batch(
+                        frame_buffer,
+                        polygon_zone,
+                        args.iou_threshold
+                    )
+
+                    detection_end_time = tm.time()
+                    stage_times['detection_and_tracking'] += (detection_end_time - detection_start_time)
+
+                    # Process each frame in the batch
+                    for frame, detections, batch_frame_idx in zip(frame_buffer, detections_batch, frame_indices_buffer):
+                        bar.update(1)
+
+                        # Calculate current frame time for visual feedback
+                        current_frame_time_sec = batch_frame_idx / video_info.fps
+
+                        # Process frame detections
+                        loop_start_time = tm.time()
+
+                        annotated_frame, crossing_detected = process_frame_detections(
+                            frame=frame,
+                            detections=detections,
+                            frame_idx=batch_frame_idx,
+                            args=args,
+                            config=config,
+                            detector_tracker=detector_tracker,
+                            kf_manager=kf_manager,
+                            zone_manager=zone_manager,
+                            view_transformer=view_transformer,
+                            event_processor=event_processor,
+                            annotation_manager=annotation_manager,
+                            double_line_counter=double_line_counter,
+                            coordinates=coordinates,
+                            future_coordinates=future_coordinates,
+                            csv_rows=csv_rows,
+                            ttc_labels=ttc_labels,
+                            last_seen_frame=last_seen_frame,
+                            previous_detections=previous_detections,
+                            ttc_event_count_ref=ttc_event_count,
+                            video_info=video_info,
+                            ENTRY_LINE=ENTRY_LINE,
+                            EXIT_LINE=EXIT_LINE,
+                            MAX_AGE_FRAMES=MAX_AGE_FRAMES,
+                            current_frame_time_sec=current_frame_time_sec,
+                            stage_times=stage_times
+                        )
+
+                        # Time frame sink
+                        frame_sink_start_time = tm.time()
+
+                        # Write frame
+                        sink.write_frame(annotated_frame)
+
+                        frame_sink_end_time = tm.time()
+                        stage_times['frame_sink'] += (frame_sink_end_time - frame_sink_start_time)
+
+                        # Calculate total loop time
+                        loop_end_time = tm.time()
+                        stage_times['total_loop_time'] += (loop_end_time - loop_start_time)
+
+                        # Increment frame count for profiling
+                        frame_count_for_profiling += 1
+
+                        # Display if enabled
+                        if config.DISPLAY:
+                            display_frame = cv2.resize(annotated_frame, (1920, 1080))
+                            cv2.imshow("Preview", display_frame)
+                            if cv2.waitKey(1) & 0xFF == ord('q'):
+                                break
+
+                    # Clear buffers
+                    frame_buffer.clear()
+                    frame_indices_buffer.clear()
+
+        else:
+            # Single frame processing mode (original behavior)
+            for frame_idx, frame in enumerate(frame_generator):
+                if frame_idx >= clip_frames:
+                    break
+
+                bar.update(1)
+
+                # Calculate current frame time for visual feedback
+                current_frame_time_sec = frame_idx / video_info.fps
+
+                # Start timing total loop time
+                loop_start_time = tm.time()
+
+                # Time detection and tracking
+                detection_start_time = tm.time()
+
+                # Detect and track
+                detections = detector_tracker.detect_and_track(
+                    frame,
+                    polygon_zone,
+                    args.iou_threshold
+                )
+
+                detection_end_time = tm.time()
+                stage_times['detection_and_tracking'] += (detection_end_time - detection_start_time)
+
+                # Process frame detections
+                annotated_frame, crossing_detected = process_frame_detections(
+                    frame=frame,
+                    detections=detections,
+                    frame_idx=frame_idx,
+                    args=args,
+                    config=config,
+                    detector_tracker=detector_tracker,
+                    kf_manager=kf_manager,
+                    zone_manager=zone_manager,
+                    view_transformer=view_transformer,
+                    event_processor=event_processor,
+                    annotation_manager=annotation_manager,
+                    double_line_counter=double_line_counter,
+                    coordinates=coordinates,
+                    future_coordinates=future_coordinates,
+                    csv_rows=csv_rows,
+                    ttc_labels=ttc_labels,
+                    last_seen_frame=last_seen_frame,
+                    previous_detections=previous_detections,
+                    ttc_event_count_ref=ttc_event_count,
+                    video_info=video_info,
+                    ENTRY_LINE=ENTRY_LINE,
+                    EXIT_LINE=EXIT_LINE,
+                    MAX_AGE_FRAMES=MAX_AGE_FRAMES,
+                    current_frame_time_sec=current_frame_time_sec,
+                    stage_times=stage_times
+                )
+
+                # Time frame sink
+                frame_sink_start_time = tm.time()
+
+                # Write frame
+                sink.write_frame(annotated_frame)
+
+                frame_sink_end_time = tm.time()
+                stage_times['frame_sink'] += (frame_sink_end_time - frame_sink_start_time)
+
+                # Calculate total loop time
+                loop_end_time = tm.time()
+                stage_times['total_loop_time'] += (loop_end_time - loop_start_time)
+
+                # Increment frame count for profiling
+                frame_count_for_profiling += 1
+
+                # Display if enabled
+                if config.DISPLAY:
+                    display_frame = cv2.resize(annotated_frame, (1920, 1080))
+                    cv2.imshow("Preview", display_frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
 
         if config.DISPLAY:
             cv2.destroyAllWindows()
@@ -1043,6 +1231,9 @@ def main():
         logging.info(f"Annotation: {(stage_times['annotation'] / frame_count_for_profiling) * 1000:.2f} ms")
         logging.info(f"Frame Sink: {(stage_times['frame_sink'] / frame_count_for_profiling) * 1000:.2f} ms")
         logging.info(f"Total Loop Time: {(stage_times['total_loop_time'] / frame_count_for_profiling) * 1000:.2f} ms")
+
+        if args.batch_inference:
+            logging.info(f"Batch Size Used: {args.batch_size}")
 
         # Enhanced CSV output with TTC safeguard statistics
         if hasattr(event_processor, 'ttc_processor'):
@@ -1070,7 +1261,7 @@ def main():
 
     # Save results
     bar.close()
-    print(f"Total TTC events logged: {ttc_event_count}")
+    print(f"Total TTC events logged: {ttc_event_count[0]}")
 
     # Save all CSV files
     io_manager.save_vehicle_metrics(csv_rows)
@@ -1102,7 +1293,7 @@ def main():
 
     # Print summary
     elapsed = tm.time() - t0
-    fps = frame_idx / elapsed
+    fps = frame_idx / elapsed if elapsed > 0 else 0
     print(f"Done: {frame_idx} frames in {elapsed:.1f}s ({fps:.2f} FPS)")
 
 

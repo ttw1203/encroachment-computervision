@@ -1,4 +1,4 @@
-"""Enhanced configuration management with TTC safeguard parameters."""
+"""Enhanced configuration management with TTC safeguard parameters and batch inference support."""
 import os
 import json
 import yaml
@@ -28,6 +28,9 @@ class Config:
         self.RF_DETR_CUSTOM_CLASSES_PATH = os.getenv("RF_DETR_CUSTOM_CLASSES_PATH")
         self.RF_DETR_RESOLUTION = int(os.getenv("RF_DETR_RESOLUTION", "560"))
         self.RF_DETR_VARIANT = os.getenv("RF_DETR_VARIANT", "base")
+
+        # Batch inference configuration
+        self.DEFAULT_BATCH_SIZE = int(os.getenv("DEFAULT_BATCH_SIZE", "8"))
 
         # Zone configuration (unchanged)
         self.ENC_ZONE_CONFIG = os.getenv("ENC_ZONE_CONFIG")
