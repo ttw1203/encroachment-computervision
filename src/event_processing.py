@@ -1,8 +1,9 @@
 """Enhanced event processor with integrated Kalman filter TTC safeguards."""
-from typing import Dict, List, Tuple, Optional, Callable, Set
+from typing import Dict, List, Tuple, Optional, Callable
 import math
 import numpy as np
 from dataclasses import dataclass
+from src.geometry_and_transforms import line_side
 
 
 @dataclass
@@ -518,5 +519,52 @@ class EventProcessor:
                               world_pos: Tuple[float, float], frame_idx: int,
                               entry_line: np.ndarray, exit_line: np.ndarray) -> Optional[Dict]:
         """Process segment-based speed measurement (unchanged)."""
-        # [Keep existing implementation]
-        pass
+        p_cur = current_pos
+        Xf, Yf = world_pos
+
+        if tracker_id not in self.segment_state:
+            self.segment_state[tracker_id] = {
+                'p_prev': p_cur,
+                'side_prev': line_side(p_cur, *entry_line)
+            }
+
+        st = self.segment_state[tracker_id]
+        prev_side = st['side_prev']
+        curr_side = line_side(p_cur, *entry_line)
+
+        if 't0' not in st and prev_side * curr_side < 0:
+            st.update(t0=frame_idx, x0m=Xf, y0m=Yf)
+
+        prev_exit = line_side(st['p_prev'], *exit_line)
+        curr_exit = line_side(p_cur, *exit_line)
+
+        result = None
+        if 't0' in st and 't_exit' not in st and prev_exit * curr_exit < 0:
+            t1 = frame_idx
+            dt = (t1 - st['t0']) / self.video_fps
+
+            if dt > 0:
+                dx = Xf - st['x0m']
+                dy = Yf - st['y0m']
+                v_ms = math.hypot(dx, dy) / dt
+
+                if self.calibration_func is not None:
+                    v_ms = self.calibration_func(v_ms)
+
+                result = {
+                    'vehicle_id': tracker_id,
+                    'frame_entry': st['t0'],
+                    'frame_exit': t1,
+                    'distance_m': round(math.hypot(dx, dy), 2),
+                    'time_s': round(dt, 3),
+                    'speed_m_s': round(v_ms, 2),
+                    'speed_km_h': round(v_ms * 3.6, 2)
+                }
+                self.segment_results.append(list(result.values()))
+
+            st['t_exit'] = t1
+
+        st['p_prev'] = p_cur
+        st['side_prev'] = curr_side
+
+        return result
