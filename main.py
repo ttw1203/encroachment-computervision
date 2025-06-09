@@ -435,6 +435,14 @@ def parse_arguments() -> argparse.Namespace:
     # Now initialize config with the parsed env file
     config = Config(env_path=args.env_file)
 
+    # Set defaults from config for arguments that weren't provided
+    if not args.source_video_path:
+        args.source_video_path = config.VIDEO_PATH
+    if not args.target_video_path:
+        args.target_video_path = config.OUTPUT_PATH
+    if not args.zones_file:
+        args.zones_file = config.ENC_ZONE_CONFIG
+
     # Override config with command line arguments if provided
     if hasattr(args, 'initial_velocity_uncertainty') and args.initial_velocity_uncertainty:
         os.environ['INITIAL_VELOCITY_UNCERTAINTY'] = str(args.initial_velocity_uncertainty)
