@@ -255,7 +255,10 @@ class GroundTruthExtractor:
                 '--no_blend_zones',  # As requested
                 '--segment_speed',  # As requested
                 '--confidence_threshold', '0.4',
-                '--iou_threshold', '0.5'
+                '--iou_threshold', '0.5',
+                '--detector_model', 'rf_detr',
+                '--env_file', '.env.mirpur.kaggle',
+                '--tracker', 'bytetrack'
             ]
 
             # Set environment for output directory
