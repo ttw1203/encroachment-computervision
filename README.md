@@ -53,7 +53,7 @@ cd encroachment-computervision
 
 2. **Install dependencies:**
 ```bash
-pip install -r requirements.txt
+pip install -r requirements_strict.txt
 ```
 
 3. **Download model weights:**

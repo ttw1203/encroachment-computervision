@@ -10,7 +10,6 @@ import supervision as sv
 import math
 from typing import Dict, Set, Optional
 from dataclasses import dataclass
-import os
 # Import our modules
 from src.config import Config
 from src.detection_and_tracking import DetectionTracker, filter_rider_persons
@@ -255,98 +254,48 @@ class DoubleLineVehicleCounter:
         return processed_counts
 
 
-def parse_arguments() -> argparse.Namespace:
-    """Parse command line arguments with enhanced TTC safeguard options."""
-    parser = argparse.ArgumentParser(
-        description="Vehicle Speed Estimation with Enhanced TTC Safeguards"
-    )
-
-    parser.add_argument(
+def parse_arguments() -> tuple[argparse.Namespace, Config]:
+    """
+    Parse command line arguments, loading defaults from the specified .env file.
+    Returns the parsed arguments and the loaded config object.
+    """
+    # Preliminary parser to get the --env_file argument first
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument(
         "--env_file",
         default=".env.bns",
         help="Path to the environment configuration file (default: .env.bns)",
         type=str
     )
-    # New TTC safeguard arguments
-    parser.add_argument(
-        "--initial_velocity_uncertainty",
-        type=float,
-        help="Initial velocity uncertainty for new tracks (m/s)"
+    pre_args, remaining_argv = pre_parser.parse_known_args()
+
+    # Initialize configuration from the specified .env file
+    config = Config(env_path=pre_args.env_file)
+
+    # Main parser, using the pre-parser to include --env_file
+    parser = argparse.ArgumentParser(
+        description="Vehicle Speed Estimation with Enhanced TTC Safeguards",
+        parents=[pre_parser],
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument(
-        "--initial_position_uncertainty",
-        type=float,
-        help="Initial position uncertainty for new tracks (meters)"
-    )
-    parser.add_argument(
-        "--ttc_burn_in_frames",
-        type=int,
-        help="Number of frames to skip TTC for new tracks"
-    )
-    parser.add_argument(
-        "--ttc_min_velocity",
-        type=float,
-        help="Minimum velocity for TTC calculation (m/s)"
-    )
-    parser.add_argument(
-        "--ttc_min_track_confidence",
-        type=float,
-        help="Minimum track confidence for TTC calculation"
-    )
-    # Enhanced TTC arguments
-    parser.add_argument(
-        "--ttc_threshold_on",
-        type=float,
-        help="TTC threshold for activation (seconds)"
-    )
-    parser.add_argument(
-        "--ttc_threshold_off",
-        type=float,
-        help="TTC threshold for deactivation (seconds)"
-    )
-    parser.add_argument(
-        "--ttc_persistence_frames",
-        type=int,
-        help="Frames required for TTC persistence"
-    )
-    parser.add_argument(
-        "--min_confidence_ttc",
-        type=float,
-        help="Minimum detection confidence for TTC evaluation"
-    )
-    parser.add_argument(
-        "--enable_ttc_debug",
-        action="store_true",
-        help="Enable TTC debug mode and visualizations"
-    )
-    parser.add_argument(
-        "--no_blend_zones",
-        action="store_true",
-        help="Disable the translucent curb-lane overlays drawn by blend_zone()"
-    )
-    parser.add_argument(
-        "--no_annotations",
-        action="store_true",
-        help="Disable all visual annotations on the output video"
-    )
-    parser.add_argument(
-        "--initial_velocity_frames",
-        default=2,
-        type=int,
-        choices=[2, 3],
-        help="Number of frames to use for initial velocity calculation (default: 2)"
-    )
+
+    # Set defaults from the loaded config object
     parser.add_argument(
         "--source_video_path",
-        required=False,
+        default=config.VIDEO_PATH,
         help="Path to the source video file",
         type=str
     )
     parser.add_argument(
         "--target_video_path",
-        required=False,
+        default=config.OUTPUT_PATH,
         help="Path to the target video file (output)",
         type=str
+    )
+    parser.add_argument(
+        "--zones_file",
+        default=config.ENC_ZONE_CONFIG,
+        help="YAML/JSON file with curb-lane polygons"
     )
     parser.add_argument(
         "--confidence_threshold",
@@ -361,23 +310,101 @@ def parse_arguments() -> argparse.Namespace:
         type=float
     )
     parser.add_argument(
+        "--ttc_threshold",
+        default=config.DEFAULT_TTC_THRESHOLD,
+        help="Only show TTC if it's ≤ this value (in seconds)",
+        type=float
+    )
+    parser.add_argument(
         "--num_future_predictions",
+        default=config.DEFAULT_NUM_FUTURE_PREDICTIONS,
         help="Number of future points to predict per vehicle",
         type=int
     )
     parser.add_argument(
         "--future_prediction_interval",
+        default=config.DEFAULT_FUTURE_PREDICTION_INTERVAL,
         help="Time interval (seconds) between future predictions",
         type=float
     )
     parser.add_argument(
-        "--ttc_threshold",
-        help="Only show TTC if it's ≤ this value (in seconds)",
-        type=float
+        "--initial_velocity_uncertainty",
+        default=config.INITIAL_VELOCITY_UNCERTAINTY,
+        type=float,
+        help="Initial velocity uncertainty for new tracks (m/s)"
     )
     parser.add_argument(
-        "--zones_file",
-        help="YAML/JSON file with curb-lane polygons"
+        "--initial_position_uncertainty",
+        default=config.INITIAL_POSITION_UNCERTAINTY,
+        type=float,
+        help="Initial position uncertainty for new tracks (meters)"
+    )
+    parser.add_argument(
+        "--ttc_burn_in_frames",
+        default=config.TTC_BURN_IN_FRAMES,
+        type=int,
+        help="Number of frames to skip TTC for new tracks"
+    )
+    parser.add_argument(
+        "--ttc_min_velocity",
+        default=config.TTC_MIN_VELOCITY,
+        type=float,
+        help="Minimum velocity for TTC calculation (m/s)"
+    )
+    parser.add_argument(
+        "--ttc_min_track_confidence",
+        default=config.TTC_MIN_TRACK_CONFIDENCE,
+        type=float,
+        help="Minimum track confidence for TTC calculation"
+    )
+    parser.add_argument(
+        "--ttc_threshold_on",
+        default=config.TTC_THRESHOLD_ON,
+        type=float,
+        help="TTC threshold for activation (seconds)"
+    )
+    parser.add_argument(
+        "--ttc_threshold_off",
+        default=config.TTC_THRESHOLD_OFF,
+        type=float,
+        help="TTC threshold for deactivation (seconds)"
+    )
+    parser.add_argument(
+        "--ttc_persistence_frames",
+        default=config.TTC_PERSISTENCE_FRAMES,
+        type=int,
+        help="Frames required for TTC persistence"
+    )
+    parser.add_argument(
+        "--min_confidence_ttc",
+        default=config.MIN_CONFIDENCE_FOR_TTC,
+        type=float,
+        help="Minimum detection confidence for TTC evaluation"
+    )
+    parser.add_argument(
+        "--speed_smoothing_window",
+        default=config.SPEED_SMOOTHING_WINDOW,
+        type=int,
+        help="Number of frames to use for speed smoothing"
+    )
+    parser.add_argument(
+        "--max_acceleration",
+        default=config.MAX_ACCELERATION,
+        type=float,
+        help="Maximum allowed acceleration in m/s²"
+    )
+    parser.add_argument(
+        "--min_speed_threshold",
+        default=config.MIN_SPEED_THRESHOLD,
+        type=float,
+        help="Minimum speed threshold in m/s below which velocity is set to 0"
+    )
+    parser.add_argument(
+        "--initial_velocity_frames",
+        default=config.INITIAL_VELOCITY_FRAMES,
+        type=int,
+        choices=[2, 3],
+        help="Number of frames to use for initial velocity calculation"
     )
     parser.add_argument(
         "--dump_zones_png",
@@ -387,7 +414,23 @@ def parse_arguments() -> argparse.Namespace:
         "--tracker",
         choices=["strongsort", "bytetrack"],
         default="strongsort",
-        help="Tracking backend to use (default: strongsort)",
+        help="Tracking backend to use",
+    )
+    parser.add_argument(
+        "--detector_model",
+        choices=["yolo", "rf_detr"],
+        default="yolo",
+        help="Object detection model to use"
+    )
+    parser.add_argument(
+        "--no_blend_zones",
+        action="store_true",
+        help="Disable the translucent curb-lane overlays drawn by blend_zone()"
+    )
+    parser.add_argument(
+        "--no_annotations",
+        action="store_true",
+        help="Disable all visual annotations on the output video"
     )
     parser.add_argument(
         "--segment_speed",
@@ -400,63 +443,19 @@ def parse_arguments() -> argparse.Namespace:
         help="Display basic info (ID, Class, Confidence) instead of speed/TTC"
     )
     parser.add_argument(
-        "--detector_model",
-        choices=["yolo", "rf_detr"],
-        default="yolo",
-        help="Object detection model to use (default: yolo)"
-    )
-    parser.add_argument(
         "--advanced_counting",
         action="store_true",
         help="Enable advanced double-line vehicle counting (default: off)"
     )
-    # New stability parameters
     parser.add_argument(
-        "--speed_smoothing_window",
-        default=5,
-        type=int,
-        help="Number of frames to use for speed smoothing (default: 5)"
-    )
-    parser.add_argument(
-        "--max_acceleration",
-        default=5.0,
-        type=float,
-        help="Maximum allowed acceleration in m/s² (default: 5.0)"
-    )
-    parser.add_argument(
-        "--min_speed_threshold",
-        default=0.1,
-        type=float,
-        help="Minimum speed threshold in m/s below which velocity is set to 0 (default: 0.1)"
+        "--enable_ttc_debug",
+        default=config.ENABLE_TTC_DEBUG,
+        action="store_true",
+        help="Enable TTC debug mode and visualizations"
     )
 
-    args = parser.parse_args()
-
-    # Now initialize config with the parsed env file
-    config = Config(env_path=args.env_file)
-
-    # Set defaults from config for arguments that weren't provided
-    if not args.source_video_path:
-        args.source_video_path = config.VIDEO_PATH
-    if not args.target_video_path:
-        args.target_video_path = config.OUTPUT_PATH
-    if not args.zones_file:
-        args.zones_file = config.ENC_ZONE_CONFIG
-
-    # Override config with command line arguments if provided
-    if hasattr(args, 'initial_velocity_uncertainty') and args.initial_velocity_uncertainty:
-        os.environ['INITIAL_VELOCITY_UNCERTAINTY'] = str(args.initial_velocity_uncertainty)
-    if hasattr(args, 'initial_position_uncertainty') and args.initial_position_uncertainty:
-        os.environ['INITIAL_POSITION_UNCERTAINTY'] = str(args.initial_position_uncertainty)
-    if hasattr(args, 'ttc_burn_in_frames') and args.ttc_burn_in_frames:
-        os.environ['TTC_BURN_IN_FRAMES'] = str(args.ttc_burn_in_frames)
-    if hasattr(args, 'ttc_min_velocity') and args.ttc_min_velocity:
-        os.environ['TTC_MIN_VELOCITY'] = str(args.ttc_min_velocity)
-    if hasattr(args, 'ttc_min_track_confidence') and args.ttc_min_track_confidence:
-        os.environ['TTC_MIN_TRACK_CONFIDENCE'] = str(args.ttc_min_track_confidence)
-
-    return args
-
+    args = parser.parse_args(remaining_argv)
+    return args, config
 
 
 def validate_detection_consistency(detections: sv.Detections, previous_detections: dict[int, np.ndarray],
@@ -492,12 +491,9 @@ def main():
         handlers=[logging.FileHandler('performance_log.txt')],
         format='%(asctime)s - %(message)s'
     )
-    # Parse arguments
-    args = parse_arguments()
-    # Initialize configuration
-    config = Config(env_path=args.env_file)
 
-
+    # Parse arguments and load configuration from .env file
+    args, config = parse_arguments()
 
 
     # Validate both TTC and Kalman configurations
@@ -831,7 +827,8 @@ def main():
                 # Process segment speed if enabled
                 if args.segment_speed:
                     bbox = detections.xyxy[det_idx].astype(float)
-                    p_cur = ((bbox[0] + bbox[2]) * 0.5, (bbox[1] + bbox[3]) * 0.5)
+                    p_cur = ((bbox[0] + bbox[2]) * 0.5,
+                             (bbox[1] + bbox[3]) * 0.5)
 
                     event_processor.process_segment_speed(
                         tracker_id, p_cur, (Xf, Yf), frame_idx,
