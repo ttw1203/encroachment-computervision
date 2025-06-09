@@ -261,9 +261,6 @@ def parse_arguments() -> argparse.Namespace:
         description="Vehicle Speed Estimation with Enhanced TTC Safeguards"
     )
 
-    # Initialize config to get defaults
-    config = Config()
-
     parser.add_argument(
         "--env_file",
         default=".env.bns",
@@ -343,15 +340,13 @@ def parse_arguments() -> argparse.Namespace:
         "--source_video_path",
         required=False,
         help="Path to the source video file",
-        type=str,
-        default=config.VIDEO_PATH
+        type=str
     )
     parser.add_argument(
         "--target_video_path",
         required=False,
         help="Path to the target video file (output)",
-        type=str,
-        default=config.OUTPUT_PATH
+        type=str
     )
     parser.add_argument(
         "--confidence_threshold",
@@ -367,25 +362,21 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--num_future_predictions",
-        default=config.DEFAULT_NUM_FUTURE_PREDICTIONS,
         help="Number of future points to predict per vehicle",
         type=int
     )
     parser.add_argument(
         "--future_prediction_interval",
-        default=config.DEFAULT_FUTURE_PREDICTION_INTERVAL,
         help="Time interval (seconds) between future predictions",
         type=float
     )
     parser.add_argument(
         "--ttc_threshold",
-        default=config.DEFAULT_TTC_THRESHOLD,
         help="Only show TTC if it's ≤ this value (in seconds)",
         type=float
     )
     parser.add_argument(
         "--zones_file",
-        default=config.ENC_ZONE_CONFIG,
         help="YAML/JSON file with curb-lane polygons"
     )
     parser.add_argument(
