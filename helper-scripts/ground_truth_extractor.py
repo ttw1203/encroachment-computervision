@@ -257,7 +257,7 @@ class GroundTruthExtractor:
                 '--confidence_threshold', '0.4',
                 '--iou_threshold', '0.5',
                 '--detector_model', 'rf_detr',
-                '--env_file', '.env.mirpur.kaggle',
+                '--env_file', '.env.boardbazar.kaggle',
                 '--tracker', 'bytetrack'
             ]
 
