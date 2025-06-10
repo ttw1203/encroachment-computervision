@@ -349,8 +349,8 @@ class GroundTruthExtractor:
             self.logger.error(f"Error writing ground truth info: {e}")
 
     def process_all_vehicles(self, csv_path: str, video_path: str,
-                             output_base_dir: str, window_before: float = 5.0,
-                             window_after: float = 5.0):
+                             output_base_dir: str, window_before: float = 10.0,
+                             window_after: float = 10.0):
         """Process all vehicles from the CSV file.
 
         Args:
@@ -456,14 +456,14 @@ def main():
     parser.add_argument(
         "--window_before",
         type=float,
-        default=5.0,
+        default=10.0,
         help="Seconds before timestamp (default: 5.0)"
     )
 
     parser.add_argument(
         "--window_after",
         type=float,
-        default=5.0,
+        default=10.0,
         help="Seconds after timestamp (default: 5.0)"
     )
 
