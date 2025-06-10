@@ -254,8 +254,8 @@ class GroundTruthExtractor:
                 '--target_video_path', output_video,
                 '--no_blend_zones',  # As requested
                 '--segment_speed',  # As requested
-                '--confidence_threshold', '0.4',
-                '--iou_threshold', '0.5',
+                '--confidence_threshold', '0.55',
+                '--iou_threshold', '0.3',
                 '--detector_model', 'rf_detr',
                 '--env_file', '.env.boardbazar.kaggle',
                 '--tracker', 'bytetrack'
