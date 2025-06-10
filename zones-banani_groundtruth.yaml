@@ -24,9 +24,9 @@ counting_line_b:
   - [283, 737]
   - [1860, 653]
 
-# Segment lines
-segment_entry: [[0, 702], [939, 553]]   # upstream line
-segment_exit: [[0, 781], [1031, 616]]   # downstream line
+# Segment lines (reversed for other direction)
+segment_entry: [[0, 781], [1031, 616]]   # upstream line
+segment_exit: [[0, 702], [939, 553]]   # downstream line
 
 # View transformation parameters
 source_points:
