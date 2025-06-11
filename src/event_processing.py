@@ -86,7 +86,11 @@ class EnhancedTTCProcessor:
                 self.id_to_class[tracker_id] = detector_tracker.get_class_name(class_id)
 
         # Process all tracker pairs
-        active_trackers = list(kf_states.keys())
+        if hasattr(detections, 'tracker_id') and len(detections) > 0:
+            # Convert to set to remove duplicates, then back to list
+            active_trackers = list(set(int(tid) for tid in detections.tracker_id))
+        else:
+            active_trackers = []
 
         for i, tracker_i in enumerate(active_trackers):
             for j, tracker_j in enumerate(active_trackers[i + 1:], i + 1):
