@@ -820,7 +820,8 @@ def main():
                         MAX_AGE_FRAMES,
                         args.ttc_threshold,
                         detections=detections,
-                        detector_tracker=detector_tracker
+                        detector_tracker=detector_tracker,
+                        polygon_zone=polygon_zone  # ADD THIS LINE
                     )
 
                     if ttc_event:

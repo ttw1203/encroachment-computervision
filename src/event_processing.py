@@ -74,8 +74,8 @@ class EnhancedTTCProcessor:
         self.debug_mode = config.get('ENABLE_TTC_DEBUG', False)
 
     def process_ttc_events(self, detections, kf_states: Dict, frame_idx: int,
-                           detector_tracker) -> List[TTCEvent]:
-        """Main TTC processing pipeline with integrated Kalman safeguards."""
+                           detector_tracker, polygon_zone=None) -> List[TTCEvent]:
+        """Main TTC processing pipeline with ROI-based filtering to prevent ghost TTCs."""
         current_events = []
 
         # Update tracker activity
@@ -88,6 +88,24 @@ class EnhancedTTCProcessor:
         # Process all tracker pairs
         active_trackers = list(kf_states.keys())
 
+        if len(detections) > 0:
+            detected_trackers = set(int(tid) for tid in detections.tracker_id)
+
+            if polygon_zone is not None:
+                # Method 1: Use detection positions with ROI filtering
+                roi_mask = polygon_zone.trigger(detections)  # Pass the entire detections object
+
+                for i, tracker_id in enumerate(detections.tracker_id):
+                    if roi_mask[i]:  # Only include if detection is inside ROI
+                        active_trackers.append(int(tracker_id))
+            else:
+                # Fallback: use all detected trackers if no ROI defined
+                active_trackers = list(detected_trackers)
+
+        # Remove duplicates and ensure we have Kalman states
+        active_trackers = [tid for tid in set(active_trackers) if tid in kf_states]
+
+        # Process TTC for pairs of active (detected + in ROI) trackers only
         for i, tracker_i in enumerate(active_trackers):
             for j, tracker_j in enumerate(active_trackers[i + 1:], i + 1):
                 self.total_event_attempts += 1
@@ -450,12 +468,12 @@ class EventProcessor:
     def calculate_ttc(self, tracker_id: int, kf_states: Dict,
                       last_seen_frame: Dict, current_frame: int,
                       max_age_frames: int, ttc_threshold: float,
-                      detections=None, detector_tracker=None) -> Optional[Dict]:
+                      detections=None, detector_tracker=None, polygon_zone=None) -> Optional[Dict]:
         """Enhanced TTC calculation with integrated Kalman safeguards."""
         if detections is not None and detector_tracker is not None:
             # Use enhanced processing with Kalman integration
             events = self.ttc_processor.process_ttc_events(
-                detections, kf_states, current_frame, detector_tracker)
+                detections, kf_states, current_frame, detector_tracker, polygon_zone)
 
             # Find event for this tracker_id
             for event in events:
