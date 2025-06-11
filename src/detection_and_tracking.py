@@ -12,7 +12,7 @@ class DetectionTracker:
     """Manages object detection and tracking."""
 
     def __init__(self, model_weights: str, device: str, tracker_type: str = "strongsort",
-                 confidence_threshold: float = 0.5, video_fps: float = 30.0,
+                 confidence_threshold: float = 0.5, max_age_seconds: float = 2.0, video_fps: float = 30.0,
                  detector_model: str = "yolo", rf_detr_config: Optional[Dict[str, Any]] = None):
         """Initialize detection and tracking components."""
         self.detector_model = detector_model
@@ -23,6 +23,8 @@ class DetectionTracker:
 
         # Initialize detection smoother
         self.smoother = sv.DetectionsSmoother()
+
+        max_age_frames = int(video_fps * max_age_seconds)
 
         # Initialize detection model
         if detector_model == "rf_detr":
@@ -36,13 +38,13 @@ class DetectionTracker:
                 reid_weights=Path("/workspace/video_data/osnet_ain_x1_0_vehicle_reid.onnx"),
                 device=0 if device != "cpu" else "cpu",  # Changed from 'device' to "cpu",
                 half=True,
-                max_age=0,
+                max_age=max_age_frames,
             )
         else:  # ByteTrack
             self.tracker = sv.ByteTrack(
                 frame_rate=int(video_fps),
                 track_activation_threshold=confidence_threshold,
-                lost_track_buffer=0,
+                lost_track_buffer=max_age_frames,
                 minimum_matching_threshold=confidence_threshold
             )
 
