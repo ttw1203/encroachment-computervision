@@ -105,7 +105,7 @@ class Config:
         self.VEHICLE_DIMENSIONS = self._load_vehicle_dimensions()
 
         # Default parameters (unchanged)
-        self.CLIP_SECONDS = 25
+        self.CLIP_SECONDS = 60
         self.DISPLAY = False
         self.ENCROACH_SECS = 1
         self.MOVE_THRESH_METRES = 1.0
