@@ -112,7 +112,7 @@ class Config:
         self.DEFAULT_NUM_FUTURE_PREDICTIONS = 10
         self.DEFAULT_FUTURE_PREDICTION_INTERVAL = 0.1
         self.DEFAULT_TTC_THRESHOLD = 1.0
-        self.MAX_AGE_SECONDS = 1.5
+        self.MAX_AGE_SECONDS = 0
         self.COLLISION_DISTANCE = 2.0
 
     def get_kalman_config(self) -> Dict[str, Any]:
