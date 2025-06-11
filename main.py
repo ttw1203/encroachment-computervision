@@ -1,4 +1,4 @@
-"""Main script for running the vehicle tracking and analysis pipeline with enhanced stability and performance profiling."""
+"""Main script for running the vehicle tracking and analysis pipeline with enhanced stability."""
 import argparse
 import logging
 from collections import defaultdict, deque
@@ -483,15 +483,7 @@ def validate_detection_consistency(detections: sv.Detections, previous_detection
 
 
 def main():
-    """Main execution function with enhanced TTC safeguards and performance profiling."""
-
-    # Set up File-based Logging
-    logging.basicConfig(
-        level=logging.INFO,
-        handlers=[logging.FileHandler('performance_log.txt')],
-        format='%(asctime)s - %(message)s'
-    )
-
+    """Main execution function with enhanced TTC safeguards."""
     # Parse arguments and load configuration from .env file
     args, config = parse_arguments()
 
@@ -534,6 +526,7 @@ def main():
         except (ValueError, FileNotFoundError) as e:
             print(f"[ERROR] RF-DETR configuration error: {e}")
             return
+
 
     # Set up logging
     logging.getLogger('ultralytics').setLevel(logging.CRITICAL)
@@ -696,15 +689,11 @@ def main():
     previous_detections = {}  # Store previous detection positions
     MAX_AGE_FRAMES = int(video_info.fps * config.MAX_AGE_SECONDS)
 
-    # Initialize Profiling Data Structures
-    stage_times = defaultdict(float)
-    frame_count_for_profiling = 0
-
     # Progress bar
     bar = tqdm(total=clip_frames, desc="Processing video", unit="frame")
     t0 = tm.time()
 
-    # Main processing loop with enhanced TTC safeguards and performance profiling
+    # Main processing loop with enhanced TTC safeguards
     frame_generator = sv.get_video_frames_generator(source_path=args.source_video_path)
 
     with sv.VideoSink(args.target_video_path, video_info) as sink:
@@ -715,14 +704,8 @@ def main():
             bar.update(1)
             ttc_labels.clear()
 
-            # Start timing total loop time
-            loop_start_time = tm.time()
-
             # Calculate current frame time for visual feedback
             current_frame_time_sec = frame_idx / video_info.fps
-
-            # Time detection and tracking
-            detection_start_time = tm.time()
 
             # Detect and track
             detections = detector_tracker.detect_and_track(
@@ -731,29 +714,17 @@ def main():
                 args.iou_threshold
             )
 
-            detection_end_time = tm.time()
-            stage_times['detection_and_tracking'] += (detection_end_time - detection_start_time)
-
-            # Time filtering and validation
-            filtering_start_time = tm.time()
-
             # Filter riders if needed
             detections = filter_rider_persons(detections, iou_thr=0.30)
 
             # Validate detection consistency
             detections = validate_detection_consistency(detections, previous_detections)
 
-            filtering_end_time = tm.time()
-            stage_times['filtering_and_validation'] += (filtering_end_time - filtering_start_time)
-
             # Update previous detections
             if len(detections) > 0:
                 centers = detections.get_anchors_coordinates(sv.Position.CENTER)
                 for idx, tid in enumerate(detections.tracker_id):
                     previous_detections[tid] = centers[idx]
-
-            # Time encroachment check
-            encroachment_start_time = tm.time()
 
             # Check encroachment
             new_enc_events = zone_manager.check_encroachment(
@@ -766,18 +737,12 @@ def main():
             for event in new_enc_events:
                 event['class_name'] = detector_tracker.get_class_name(event['class_id'])
 
-            encroachment_end_time = tm.time()
-            stage_times['encroachment_check'] += (encroachment_end_time - encroachment_start_time)
-
             # Update tracking state
             active_ids = set(detections.tracker_id.tolist() if len(detections) else [])
 
             # Update last seen frame
             for tid in active_ids:
                 last_seen_frame[tid] = frame_idx
-
-            # Time Kalman and event processing
-            kalman_start_time = tm.time()
 
             # Process each detection with enhanced Kalman updates
             points = detections.get_anchors_coordinates(anchor=sv.Position.CENTER)
@@ -958,12 +923,6 @@ def main():
 
                 labels.append(label)
 
-            kalman_end_time = tm.time()
-            stage_times['kalman_and_event_processing'] += (kalman_end_time - kalman_start_time)
-
-            # Time annotation
-            annotation_start_time = tm.time()
-
             # Draw zones (moved before other annotations for proper layering)
             if not args.no_annotations:
                 frame = zone_manager.draw_zones(frame, not args.no_blend_zones)
@@ -1000,24 +959,8 @@ def main():
                     0
                 )
 
-            annotation_end_time = tm.time()
-            stage_times['annotation'] += (annotation_end_time - annotation_start_time)
-
-            # Time frame sink
-            frame_sink_start_time = tm.time()
-
             # Write frame
             sink.write_frame(annotated_frame)
-
-            frame_sink_end_time = tm.time()
-            stage_times['frame_sink'] += (frame_sink_end_time - frame_sink_start_time)
-
-            # Calculate total loop time
-            loop_end_time = tm.time()
-            stage_times['total_loop_time'] += (loop_end_time - loop_start_time)
-
-            # Increment frame count for profiling
-            frame_count_for_profiling += 1
 
             # Display if enabled
             if config.DISPLAY:
@@ -1028,23 +971,6 @@ def main():
 
         if config.DISPLAY:
             cv2.destroyAllWindows()
-
-    # Log the Final Performance Summary
-    if frame_count_for_profiling > 0:
-        # Calculate average times
-        avg_fps = frame_count_for_profiling / stage_times['total_loop_time'] if stage_times['total_loop_time'] > 0 else 0
-
-        logging.info("--- Performance Summary ---")
-        logging.info(f"Average FPS: {avg_fps:.2f}")
-        logging.info("--- Average Time Per Stage (ms) ---")
-        logging.info(f"Detection & Tracking: {(stage_times['detection_and_tracking'] / frame_count_for_profiling) * 1000:.2f} ms")
-        logging.info(f"Filtering & Validation: {(stage_times['filtering_and_validation'] / frame_count_for_profiling) * 1000:.2f} ms")
-        logging.info(f"Kalman & Event Processing: {(stage_times['kalman_and_event_processing'] / frame_count_for_profiling) * 1000:.2f} ms")
-        logging.info(f"Encroachment Check: {(stage_times['encroachment_check'] / frame_count_for_profiling) * 1000:.2f} ms")
-        logging.info(f"Annotation: {(stage_times['annotation'] / frame_count_for_profiling) * 1000:.2f} ms")
-        logging.info(f"Frame Sink: {(stage_times['frame_sink'] / frame_count_for_profiling) * 1000:.2f} ms")
-        logging.info(f"Total Loop Time: {(stage_times['total_loop_time'] / frame_count_for_profiling) * 1000:.2f} ms")
-
         # Enhanced CSV output with TTC safeguard statistics
         if hasattr(event_processor, 'ttc_processor'):
             # Export enhanced TTC events with additional metrics
@@ -1068,7 +994,6 @@ def main():
                 print(f"  Total trackers: {total_trackers}")
                 print(f"  TTC-eligible trackers: {eligible_trackers}")
                 print(f"  Safeguard effectiveness: {((total_trackers - eligible_trackers) / max(total_trackers, 1)) * 100:.1f}% filtered")
-
     # Save results
     bar.close()
     print(f"Total TTC events logged: {ttc_event_count}")
