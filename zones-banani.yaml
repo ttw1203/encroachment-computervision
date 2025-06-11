@@ -35,8 +35,8 @@ source_points:
   - [2335, 960]
   - [59, 1080]
 
-target_width: 26
-target_height: 52.5
+target_width: 26.8
+target_height: 40.425
 
 # 8 lanes * 3m + 2m median = 26m
 # Lamp post to lamp post = 17.5 m * 3 = 52.5 m
