@@ -37,7 +37,7 @@ class DetectionTracker:
             self.tracker = StrongSort(
                 reid_weights=Path("/workspace/video_data/osnet_ain_x1_0_vehicle_reid.onnx"),
                 device=0 if device != "cpu" else "cpu",  # Changed from 'device' to "cpu",
-                half=True,
+                half=False,
                 max_age=max_age_frames,
             )
         else:  # ByteTrack
