@@ -4,6 +4,7 @@ import math
 import numpy as np
 from dataclasses import dataclass
 from src.geometry_and_transforms import line_side
+import supervision as sv
 
 
 @dataclass
@@ -74,8 +75,8 @@ class EnhancedTTCProcessor:
         self.debug_mode = config.get('ENABLE_TTC_DEBUG', False)
 
     def process_ttc_events(self, detections, kf_states: Dict, frame_idx: int,
-                           detector_tracker) -> List[TTCEvent]:
-        """Main TTC processing pipeline with integrated Kalman safeguards."""
+                           detector_tracker, polygon_zone=None) -> List[TTCEvent]:
+        """Main TTC processing pipeline with ROI-based filtering to prevent ghost TTCs."""
         current_events = []
 
         # Update tracker activity
@@ -85,13 +86,28 @@ class EnhancedTTCProcessor:
                 class_id = int(detections.class_id[i])
                 self.id_to_class[tracker_id] = detector_tracker.get_class_name(class_id)
 
-        # Process all tracker pairs
-        if hasattr(detections, 'tracker_id') and len(detections) > 0:
-            # Convert to set to remove duplicates, then back to list
-            active_trackers = list(set(int(tid) for tid in detections.tracker_id))
-        else:
-            active_trackers = []
+        # IMPROVED SOLUTION: Filter trackers by ROI position to prevent ghost TTCs
+        active_trackers = []
 
+        if len(detections) > 0:
+            detected_trackers = set(int(tid) for tid in detections.tracker_id)
+
+            if polygon_zone is not None:
+                # Method 1: Use detection positions with ROI filtering
+                detection_centers = detections.get_anchors_coordinates(sv.Position.CENTER)
+                roi_mask = polygon_zone.trigger(detection_centers)
+
+                for i, tracker_id in enumerate(detections.tracker_id):
+                    if roi_mask[i]:  # Only include if detection is inside ROI
+                        active_trackers.append(int(tracker_id))
+            else:
+                # Fallback: use all detected trackers if no ROI defined
+                active_trackers = list(detected_trackers)
+
+        # Remove duplicates and ensure we have Kalman states
+        active_trackers = [tid for tid in set(active_trackers) if tid in kf_states]
+
+        # Process TTC for pairs of active (detected + in ROI) trackers only
         for i, tracker_i in enumerate(active_trackers):
             for j, tracker_j in enumerate(active_trackers[i + 1:], i + 1):
                 self.total_event_attempts += 1
