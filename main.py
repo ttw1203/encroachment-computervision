@@ -272,6 +272,20 @@ def parse_arguments() -> tuple[argparse.Namespace, Config]:
     # Initialize configuration from the specified .env file
     config = Config(env_path=pre_args.env_file)
 
+    # ===== ADD THE VALIDATION HERE (right after config is created) =====
+    # This is around line 117 in your file
+    if hasattr(config, 'ENABLE_TTC_DEBUG') and config.ENABLE_TTC_DEBUG:
+        print(f"[DEBUG] Configuration loaded from {pre_args.env_file}:")
+        print(f"  - INITIAL_VELOCITY_UNCERTAINTY: {config.INITIAL_VELOCITY_UNCERTAINTY}")
+        print(f"  - INITIAL_POSITION_UNCERTAINTY: {config.INITIAL_POSITION_UNCERTAINTY}")
+        print(f"  - TTC_BURN_IN_FRAMES: {config.TTC_BURN_IN_FRAMES}")
+        print(f"  - TTC_MIN_VELOCITY: {config.TTC_MIN_VELOCITY}")
+        print(f"  - TTC_MIN_TRACK_CONFIDENCE: {config.TTC_MIN_TRACK_CONFIDENCE}")
+        print(f"  - SPEED_CALIBRATION_MODEL_TYPE: {config.SPEED_CALIBRATION_MODEL_TYPE}")
+        if config.SPEED_CALIBRATION_MODEL_TYPE in ["linear", "ransac_linear"]:
+            print(f"  - SPEED_CALIBRATION_MODEL_A: {config.SPEED_CALIBRATION_MODEL_A}")
+            print(f"  - SPEED_CALIBRATION_MODEL_B: {config.SPEED_CALIBRATION_MODEL_B}")
+
     # Main parser, using the pre-parser to include --env_file
     parser = argparse.ArgumentParser(
         description="Vehicle Speed Estimation with Enhanced TTC Safeguards",
@@ -458,6 +472,7 @@ def parse_arguments() -> tuple[argparse.Namespace, Config]:
     return args, config
 
 
+
 def validate_detection_consistency(detections: sv.Detections, previous_detections: dict[int, np.ndarray],
                                  max_pixel_jump: float = 50.0) -> sv.Detections:
     """Validate detections to prevent ID switches and large position jumps."""
@@ -570,7 +585,14 @@ def main():
         # Default: no calibration
         logging.warning(f"Unknown calibration model type: {model_type}. Using no calibration.")
         calibration_func = lambda x: x
-
+    # 4. Verify calibration function is working (add after calibration_func definition, ~line 145)
+    if config.ENABLE_TTC_DEBUG and model_type != "none":
+        # Test the calibration function
+        test_speeds = [1.0, 5.0, 10.0, 20.0]  # m/s
+        print(f"[DEBUG] Speed calibration test ({model_type} model):")
+        for speed in test_speeds:
+            calibrated = calibration_func(speed)
+            print(f"  {speed:.1f} m/s → {calibrated:.1f} m/s ({calibrated * 3.6:.1f} km/h)")
     # Load zone configurations
     LEFT_ZONE_POLY, RIGHT_ZONE_POLY = Config.load_zones(args.zones_file)
 
@@ -623,13 +645,23 @@ def main():
         initial_velocity_frames=args.initial_velocity_frames,
         video_fps=video_info.fps,
         max_age_seconds=config.MAX_AGE_SECONDS,
-        initial_velocity_uncertainty=args.INITIAL_VELOCITY_UNCERTAINTY,
-        position_uncertainty=args.POSITION_UNCERTAINTY,
+        initial_velocity_uncertainty=args.initial_velocity_uncertainty,
+        position_uncertainty=args.initial_position_uncertainty,
         ttc_burn_in_frames=args.ttc_burn_in_frames,
         ttc_min_velocity=args.ttc_min_velocity,
-        ttc_min_confidence=args.ttc_min_confidence
+        ttc_min_confidence=args.ttc_min_track_confidence
     )
-
+    # 3. Add debug logging to verify values are passed correctly (optional)
+    if config.ENABLE_TTC_DEBUG:
+        print(f"[DEBUG] KalmanFilterManager initialized with:")
+        print(f"  - initial_velocity_uncertainty: {args.initial_velocity_uncertainty}")
+        print(f"  - initial_position_uncertainty: {args.initial_position_uncertainty}")
+        print(f"  - ttc_burn_in_frames: {args.ttc_burn_in_frames}")
+        print(f"  - ttc_min_velocity: {args.ttc_min_velocity}")
+        print(f"  - ttc_min_track_confidence: {args.ttc_min_track_confidence}")
+        print(f"  - speed_smoothing_window: {args.speed_smoothing_window}")
+        print(f"  - max_acceleration: {args.max_acceleration}")
+        print(f"  - min_speed_threshold: {args.min_speed_threshold}")
     # Zone management
     zone_manager = ZoneManager(
         LEFT_ZONE_POLY,
