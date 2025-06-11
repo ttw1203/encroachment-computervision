@@ -1,4 +1,4 @@
-"""Main script for running the vehicle tracking and analysis pipeline with enhanced stability."""
+"""Main script for running the vehicle tracking and analysis pipeline with enhanced stability and performance profiling."""
 import argparse
 import logging
 from collections import defaultdict, deque
