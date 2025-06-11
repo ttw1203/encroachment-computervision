@@ -4,7 +4,6 @@ import math
 import numpy as np
 from dataclasses import dataclass
 from src.geometry_and_transforms import line_side
-import supervision as sv
 
 
 @dataclass
@@ -94,8 +93,7 @@ class EnhancedTTCProcessor:
 
             if polygon_zone is not None:
                 # Method 1: Use detection positions with ROI filtering
-                detection_centers = detections.get_anchors_coordinates(sv.Position.CENTER)
-                roi_mask = polygon_zone.trigger(detection_centers)
+                roi_mask = polygon_zone.trigger(detections)  # Pass the entire detections object
 
                 for i, tracker_id in enumerate(detections.tracker_id):
                     if roi_mask[i]:  # Only include if detection is inside ROI
