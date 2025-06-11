@@ -299,13 +299,13 @@ def parse_arguments() -> tuple[argparse.Namespace, Config]:
     )
     parser.add_argument(
         "--confidence_threshold",
-        default=0.5,
+        default=0.55,
         help="Confidence threshold for the model",
         type=float,
     )
     parser.add_argument(
         "--iou_threshold",
-        default=0.5,
+        default=0.3,
         help="IOU threshold for the model",
         type=float
     )
