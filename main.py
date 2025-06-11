@@ -459,7 +459,7 @@ def parse_arguments() -> tuple[argparse.Namespace, Config]:
 
 
 def validate_detection_consistency(detections: sv.Detections, previous_detections: dict[int, np.ndarray],
-                                 max_pixel_jump: float = 50.0) -> sv.Detections:
+                                 max_pixel_jump: float = 25.0) -> sv.Detections:
     """Validate detections to prevent ID switches and large position jumps."""
     if len(detections) == 0:
         return detections
