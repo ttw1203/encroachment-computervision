@@ -15,7 +15,8 @@ class KalmanFilterManager:
                  min_speed_threshold: float = 0.1, initial_velocity_frames: int = 2,
                  initial_velocity_uncertainty: float = 1.0, position_uncertainty: float = 0.5,
                  ttc_burn_in_frames: int = 10, ttc_min_velocity: float = 0.3,
-                 ttc_min_confidence: float = 0.75):
+                 ttc_min_confidence: float = 0.75, video_fps: float = 30.0,
+                 max_age_seconds: float = 2.0):
         """Initialize the Kalman filter manager with stability parameters and TTC safeguards.
 
         Args:
@@ -37,6 +38,9 @@ class KalmanFilterManager:
         self.max_acceleration = max_acceleration
         self.min_speed_threshold = min_speed_threshold
         self.direction_history: Dict[int, deque] = {}
+        self.fps = video_fps
+        self.max_age_seconds = max_age_seconds
+        self.frame_number = 0
 
         # Initial velocity calculation
         self.initial_positions: Dict[int, List[Tuple[float, float, int]]] = {}
@@ -56,6 +60,29 @@ class KalmanFilterManager:
         self.track_creation_frame: Dict[int, int] = {}  # Track when each tracker was created
         self.track_confidence: Dict[int, float] = {}  # Track confidence scores
         self.track_detection_count: Dict[int, int] = {}  # Number of detections per track
+
+    def remove_stale_trackers(self):
+        """
+        Removes trackers that have not been seen for a duration greater than
+        max_age_seconds.
+        """
+        if self.max_age_seconds is None:
+            return
+
+        stale_ids = []
+        # Calculate the frame threshold for staleness
+        stale_threshold_frames = self.max_age_seconds * self.fps
+
+        for tracker_id, data in self.kf_states.items():
+            # How long has it been since this tracker was last seen?
+            frames_since_last_seen = self.frame_number - data['last_seen']
+
+            if frames_since_last_seen > stale_threshold_frames:
+                stale_ids.append(tracker_id)
+
+        # Remove stale trackers from the dictionary
+        for tracker_id in stale_ids:
+            del self.kf_states[tracker_id]
 
     def create_kalman_filter(self, dt: float, tracker_id: int) -> cv2.KalmanFilter:
         """Create a new Kalman filter with enhanced initialization uncertainty."""
@@ -99,7 +126,7 @@ class KalmanFilterManager:
     def update_or_create(self, tracker_id: int, x: float, y: float, dt: float,
                         frame_idx: int, confidence: float = 0.5) -> cv2.KalmanFilter:
         """Update existing Kalman filter or create new one with enhanced initialization."""
-
+        self.frame_number = frame_idx
         # Track initial positions for new trackers
         if tracker_id not in self.initial_positions:
             self.initial_positions[tracker_id] = []

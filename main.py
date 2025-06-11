@@ -620,7 +620,9 @@ def main():
         speed_smoothing_window=args.speed_smoothing_window,
         max_acceleration=args.max_acceleration,
         min_speed_threshold=args.min_speed_threshold,
-        initial_velocity_frames=args.initial_velocity_frames
+        initial_velocity_frames=args.initial_velocity_frames,
+        video_fps=video_info.fps,
+        max_age_seconds=config.MAX_AGE_SECONDS
     )
 
     # Zone management
