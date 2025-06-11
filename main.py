@@ -618,6 +618,7 @@ def main():
         confidence_threshold=args.confidence_threshold,
         video_fps=video_info.fps,
         detector_model=args.detector_model,
+        max_age_seconds=config.MAX_AGE_SECONDS,
         rf_detr_config=config.get_rf_detr_config() if args.detector_model == "rf_detr" else None
     )
 
