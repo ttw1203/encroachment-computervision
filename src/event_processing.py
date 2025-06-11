@@ -470,12 +470,12 @@ class EventProcessor:
     def calculate_ttc(self, tracker_id: int, kf_states: Dict,
                       last_seen_frame: Dict, current_frame: int,
                       max_age_frames: int, ttc_threshold: float,
-                      detections=None, detector_tracker=None) -> Optional[Dict]:
+                      detections=None, detector_tracker=None, polygon_zone=None) -> Optional[Dict]:
         """Enhanced TTC calculation with integrated Kalman safeguards."""
         if detections is not None and detector_tracker is not None:
             # Use enhanced processing with Kalman integration
             events = self.ttc_processor.process_ttc_events(
-                detections, kf_states, current_frame, detector_tracker)
+                detections, kf_states, current_frame, detector_tracker, polygon_zone)
 
             # Find event for this tracker_id
             for event in events:
