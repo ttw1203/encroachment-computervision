@@ -292,7 +292,7 @@ class EnhancedTTCProcessor:
 
         dot_product = vxi_norm * vxj_norm + vyi_norm * vyj_norm
         dot_product = np.clip(dot_product, -1.0, 1.0)
-        angle_rad = math.acos(abs(dot_product))
+        angle_rad = math.acos(dot_product)
         angle_deg = math.degrees(angle_rad)
 
         if (angle_deg >= self.ttc_min_relative_angle and
