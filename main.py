@@ -622,7 +622,12 @@ def main():
         min_speed_threshold=args.min_speed_threshold,
         initial_velocity_frames=args.initial_velocity_frames,
         video_fps=video_info.fps,
-        max_age_seconds=config.MAX_AGE_SECONDS
+        max_age_seconds=config.MAX_AGE_SECONDS,
+        initial_velocity_uncertainty=args.INITIAL_VELOCITY_UNCERTAINTY,
+        position_uncertainty=args.POSITION_UNCERTAINTY,
+        ttc_burn_in_frames=args.ttc_burn_in_frames,
+        ttc_min_velocity=args.ttc_min_velocity,
+        ttc_min_confidence=args.ttc_min_confidence
     )
 
     # Zone management
