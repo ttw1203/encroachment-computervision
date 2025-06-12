@@ -111,7 +111,7 @@ class DoubleLineVehicleCounter:
                     vehicle_state.line_a_crossed = True
                     self.line_a_last_cross_time = current_time
 
-                    print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} ({class_name}) crossed Line A: {direction}")
+                    # print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} ({class_name}) crossed Line A: {direction}")
 
                     # Count vehicle if not already counted in this passage
                     if not vehicle_state.counted_this_passage:
@@ -127,7 +127,7 @@ class DoubleLineVehicleCounter:
                     vehicle_state.line_b_crossed = True
                     self.line_b_last_cross_time = current_time
 
-                    print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} ({class_name}) crossed Line B: {direction}")
+                    # print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} ({class_name}) crossed Line B: {direction}")
 
                     # Count vehicle if not already counted in this passage
                     if not vehicle_state.counted_this_passage:
@@ -157,8 +157,8 @@ class DoubleLineVehicleCounter:
             self.count_data[vehicle_state.class_name][f'total_speed_{direction}'] += speed_kmh
             self.count_data[vehicle_state.class_name][f'count_for_speed_{direction}'] += 1
 
-        print(f"[SINGLE-PASSAGE] Vehicle {vehicle_state.tracker_id} ({vehicle_state.class_name}) "
-              f"COUNTED: {direction} (first crossed Line {line_crossed})")
+        # print(f"[SINGLE-PASSAGE] Vehicle {vehicle_state.tracker_id} ({vehicle_state.class_name}) "
+        #       f"COUNTED: {direction} (first crossed Line {line_crossed})")
 
     def _check_line_crossing(self, prev_pos: tuple, curr_pos: tuple, line_coords: np.ndarray) -> bool:
         """Check if vehicle crossed a line using change of side method."""
@@ -195,10 +195,10 @@ class DoubleLineVehicleCounter:
             if (vehicle_state.first_cross_time is not None and
                 current_time - vehicle_state.first_cross_time > self.time_window_seconds):
                 vehicle_state.reset_for_new_passage()
-                print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} passage state reset (timeout)")
+                # print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} passage state reset (timeout)")
 
         for tracker_id in to_remove:
-            print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} removed from tracking")
+            # print(f"[SINGLE-PASSAGE] Vehicle {tracker_id} removed from tracking")
             del self.vehicle_states[tracker_id]
 
     def get_total_counts(self) -> Dict[str, int]:
@@ -898,9 +898,9 @@ def main():
                 elif config.ENABLE_TTC_DEBUG:
                     # Print debug info for ineligible trackers
                     status = kf_manager.get_ttc_eligibility_status(tracker_id, frame_idx)
-                    if status.get("reason") == "burn_in_period":
-                        print(f"[TTC DEBUG] Tracker {tracker_id}: In burn-in period "
-                              f"({status['frames_since_creation']}/{status['burn_in_required']} frames)")
+                    # if status.get("reason") == "burn_in_period":
+                    #     print(f"[TTC DEBUG] Tracker {tracker_id}: In burn-in period "
+                    #           f"({status['frames_since_creation']}/{status['burn_in_required']} frames)")
 
                 # Predict future positions using smoothed velocity
                 future_positions = kf_manager.predict_future_positions(
