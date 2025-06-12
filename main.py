@@ -285,6 +285,10 @@ def parse_arguments() -> tuple[argparse.Namespace, Config]:
         if config.SPEED_CALIBRATION_MODEL_TYPE in ["linear", "ransac_linear"]:
             print(f"  - SPEED_CALIBRATION_MODEL_A: {config.SPEED_CALIBRATION_MODEL_A}")
             print(f"  - SPEED_CALIBRATION_MODEL_B: {config.SPEED_CALIBRATION_MODEL_B}")
+        elif config.SPEED_CALIBRATION_MODEL_TYPE.lower() == "piecewise":
+            print(f"  - PIECEWISE_THRESH: {config.PIECEWISE_THRESH}")
+            print(f"  - PIECEWISE_A1: {config.PIECEWISE_A1}, PIECEWISE_B1: {config.PIECEWISE_B1}")
+            print(f"  - PIECEWISE_A2: {config.PIECEWISE_A2}, PIECEWISE_B2: {config.PIECEWISE_B2}")
 
     # Main parser, using the pre-parser to include --env_file
     parser = argparse.ArgumentParser(
@@ -581,10 +585,21 @@ def main():
             logging.warning(f"Error parsing poly3 coefficients: {e}. Using no calibration.")
             calibration_func = lambda x: x
 
+    elif model_type == "piecewise":
+        # Piecewise linear regression calibration
+        def calibration_func(raw_speed_m_s: float) -> float:
+            if raw_speed_m_s <= config.PIECEWISE_THRESH:
+                # First segment: x <= threshold
+                return config.PIECEWISE_A1 * raw_speed_m_s + config.PIECEWISE_B1
+            else:
+                # Second segment: x > threshold
+                return config.PIECEWISE_A2 * raw_speed_m_s + config.PIECEWISE_B2
+
     else:
         # Default: no calibration
         logging.warning(f"Unknown calibration model type: {model_type}. Using no calibration.")
         calibration_func = lambda x: x
+    
     # 4. Verify calibration function is working (add after calibration_func definition, ~line 145)
     if config.ENABLE_TTC_DEBUG and model_type != "none":
         # Test the calibration function
@@ -593,6 +608,7 @@ def main():
         for speed in test_speeds:
             calibrated = calibration_func(speed)
             print(f"  {speed:.1f} m/s → {calibrated:.1f} m/s ({calibrated * 3.6:.1f} km/h)")
+    
     # Load zone configurations
     LEFT_ZONE_POLY, RIGHT_ZONE_POLY = Config.load_zones(args.zones_file)
 
@@ -662,6 +678,7 @@ def main():
         print(f"  - speed_smoothing_window: {args.speed_smoothing_window}")
         print(f"  - max_acceleration: {args.max_acceleration}")
         print(f"  - min_speed_threshold: {args.min_speed_threshold}")
+    
     # Zone management
     zone_manager = ZoneManager(
         LEFT_ZONE_POLY,
@@ -899,6 +916,7 @@ def main():
                     future_coordinates[tracker_id] = predicted_pixels.tolist()
 
             # Signal line crossings for visual feedback if advanced counting enabled
+            crossing_detected = False
             if advanced_counting_enabled and crossing_detected:
                 # Update annotation manager with crossing times
                 annotation_manager.signal_line_a_cross(double_line_counter.line_a_last_cross_time)
@@ -1011,6 +1029,7 @@ def main():
 
         if config.DISPLAY:
             cv2.destroyAllWindows()
+        
         # Enhanced CSV output with TTC safeguard statistics
         if hasattr(event_processor, 'ttc_processor'):
             # Export enhanced TTC events with additional metrics
@@ -1034,6 +1053,7 @@ def main():
                 print(f"  Total trackers: {total_trackers}")
                 print(f"  TTC-eligible trackers: {eligible_trackers}")
                 print(f"  Safeguard effectiveness: {((total_trackers - eligible_trackers) / max(total_trackers, 1)) * 100:.1f}% filtered")
+
     # Save results
     bar.close()
     print(f"Total TTC events logged: {ttc_event_count}")

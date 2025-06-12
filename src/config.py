@@ -35,11 +35,18 @@ class Config:
         self.COUNTING_LINE_A_COORDS = self.load_counting_line_coords(self.ENC_ZONE_CONFIG, "counting_line_a")
         self.COUNTING_LINE_B_COORDS = self.load_counting_line_coords(self.ENC_ZONE_CONFIG, "counting_line_b")
 
-        # Speed calibration configuration (unchanged)
+        # Speed calibration configuration
         self.SPEED_CALIBRATION_MODEL_TYPE = os.getenv("SPEED_CALIBRATION_MODEL_TYPE", "linear")
         self.SPEED_CALIBRATION_MODEL_A = float(os.getenv("SPEED_CALIBRATION_MODEL_A", "1.0"))
         self.SPEED_CALIBRATION_MODEL_B = float(os.getenv("SPEED_CALIBRATION_MODEL_B", "0.0"))
         self.SPEED_CALIBRATION_POLY_COEFFS = os.getenv("SPEED_CALIBRATION_POLY_COEFFS", "0.0,1.0")
+        
+        # Piecewise linear regression parameters
+        self.PIECEWISE_THRESH = float(os.getenv("PIECEWISE_THRESH", "5.16"))
+        self.PIECEWISE_A1 = float(os.getenv("PIECEWISE_A1", "0.9252"))  # Slope for x <= threshold
+        self.PIECEWISE_B1 = float(os.getenv("PIECEWISE_B1", "0.1860"))  # Intercept for x <= threshold
+        self.PIECEWISE_A2 = float(os.getenv("PIECEWISE_A2", "0.5303"))  # Slope for x > threshold
+        self.PIECEWISE_B2 = float(os.getenv("PIECEWISE_B2", "2.2244"))  # Intercept for x > threshold
 
         # ============================================
         # ENHANCED KALMAN FILTER INITIALIZATION PARAMETERS
@@ -163,6 +170,11 @@ class Config:
         if self.COLLISION_DISTANCE_ON >= self.COLLISION_DISTANCE_OFF:
             errors.append("COLLISION_DISTANCE_ON must be less than COLLISION_DISTANCE_OFF")
 
+        # Validate piecewise calibration parameters
+        if self.SPEED_CALIBRATION_MODEL_TYPE.lower() == "piecewise":
+            if self.PIECEWISE_THRESH <= 0:
+                errors.append("PIECEWISE_THRESH must be positive")
+
         if errors:
             print("Kalman/TTC Configuration Errors:")
             for error in errors:
@@ -187,6 +199,14 @@ class Config:
         print(f"  Speed Smoothing: {self.SPEED_SMOOTHING_WINDOW} frames")
         print(f"  Max Acceleration: {self.MAX_ACCELERATION:.1f} m/s²")
         print(f"  Min Speed Threshold: {self.MIN_SPEED_THRESHOLD:.1f} m/s")
+        
+        # Add piecewise calibration summary if enabled
+        if self.SPEED_CALIBRATION_MODEL_TYPE.lower() == "piecewise":
+            print(f"Piecewise Calibration:")
+            print(f"  Threshold: {self.PIECEWISE_THRESH:.2f} m/s")
+            print(f"  Segment 1 (≤{self.PIECEWISE_THRESH:.2f}): y = {self.PIECEWISE_A1:.4f}x + {self.PIECEWISE_B1:.4f}")
+            print(f"  Segment 2 (>{self.PIECEWISE_THRESH:.2f}): y = {self.PIECEWISE_A2:.4f}x + {self.PIECEWISE_B2:.4f}")
+        
         print("=" * 45)
 
     def _load_vehicle_dimensions(self) -> Dict[str, Dict[str, float]]:
