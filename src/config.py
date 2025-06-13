@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 class Config:
     """Centralized configuration management with enhanced TTC and Kalman parameters."""
 
-    def __init__(self, env_path: str = ".env.mirpur.vastai"):
+    def __init__(self, env_path: str = "./src/data/.env.mirpur.vastai"):
         """Initialize configuration from environment file."""
         load_dotenv(dotenv_path=env_path)
 
