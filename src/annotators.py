@@ -254,7 +254,34 @@ class AnnotationManager:
                 )
 
         return frame
+    
+    def draw_analysis_lines(self, frame: np.ndarray, entry_line_px: np.ndarray, flow_line_px: np.ndarray, exit_line_px: np.ndarray) -> np.ndarray:
+        """
+        Draws the analysis segment lines (entry, flow, exit) on the frame.
+        These lines are used for Space Mean Speed and Flow calculations.
+        """
+        # Define colors and styles for the lines
+        ENTRY_COLOR = (255, 255, 0)   # Cyan
+        FLOW_COLOR = (0, 255, 0)      # Green
+        EXIT_COLOR = (255, 0, 255)    # Magenta
+        THICKNESS = 2
+        FONT_SCALE = 0.6
+        TEXT_COLOR = (255, 255, 255)  # White
 
+        # Draw Entry Line
+        cv2.line(frame, tuple(entry_line_px[0]), tuple(entry_line_px[1]), ENTRY_COLOR, THICKNESS, cv2.LINE_AA)
+        cv2.putText(frame, "Analysis Entry", (entry_line_px[0][0] + 10, entry_line_px[0][1] - 10), cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, TEXT_COLOR, THICKNESS, cv2.LINE_AA)
+
+        # Draw Flow Line (for vehicle counting)
+        cv2.line(frame, tuple(flow_line_px[0]), tuple(flow_line_px[1]), FLOW_COLOR, THICKNESS, cv2.LINE_AA)
+        cv2.putText(frame, "Flow Count Line", (flow_line_px[0][0] + 10, flow_line_px[0][1] - 10), cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, TEXT_COLOR, THICKNESS, cv2.LINE_AA)
+
+        # Draw Exit Line
+        cv2.line(frame, tuple(exit_line_px[0]), tuple(exit_line_px[1]), EXIT_COLOR, THICKNESS, cv2.LINE_AA)
+        cv2.putText(frame, "Analysis Exit", (exit_line_px[0][0] + 10, exit_line_px[0][1] - 10), cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, TEXT_COLOR, THICKNESS, cv2.LINE_AA)
+
+        return frame
+    
     def draw_segment_lines(self, frame: np.ndarray, entry_line: np.ndarray,
                            exit_line: np.ndarray) -> np.ndarray:
         """Draw segment entry/exit lines for speed measurement."""

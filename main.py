@@ -1005,6 +1005,31 @@ def main():
 
                 labels.append(label)
 
+            # --- START: Visualize Analysis Segment Lines ---
+            if not args.no_annotations:
+                # 1. Get the Y coordinates (in meters) from the AnalysisManager
+                entry_y = analysis_manager.entry_line_y
+                flow_y = analysis_manager.flow_line_y
+                exit_y = analysis_manager.exit_line_y
+
+                # 2. Get the width of the bird's-eye-view space from the config
+                _, target_points = config.get_source_target_points()
+                roi_width_m = target_points[1][0]
+
+                # 3. Define the lines in world coordinates (meters)
+                entry_line_m = np.array([[0, entry_y], [roi_width_m, entry_y]])
+                flow_line_m = np.array([[0, flow_y], [roi_width_m, flow_y]])
+                exit_line_m = np.array([[0, exit_y], [roi_width_m, exit_y]])
+
+                # 4. Transform these lines back to pixel coordinates for drawing
+                entry_line_px = view_transformer.inverse_transform_points(entry_line_m).astype(int)
+                flow_line_px = view_transformer.inverse_transform_points(flow_line_m).astype(int)
+                exit_line_px = view_transformer.inverse_transform_points(exit_line_m).astype(int)
+
+                # 5. Call the new drawing function from the annotation manager
+                frame = annotation_manager.draw_analysis_lines(frame, entry_line_px, flow_line_px, exit_line_px)
+            # --- END: Visualize Analysis Segment Lines ---
+            
             # Draw zones (moved before other annotations for proper layering)
             if not args.no_annotations:
                 frame = zone_manager.draw_zones(frame, not args.no_blend_zones)
