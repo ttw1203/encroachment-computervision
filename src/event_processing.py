@@ -639,7 +639,7 @@ class AnalysisManager:
             last_y = current_y - (vy / self.video_fps) # Estimate previous frame's Y
             if min(last_y, current_y) < self.entry_line_y < max(last_y, current_y):
                 self.vehicle_state[tracker_id] = {'entry_frame': frame_idx, 'last_y': current_y}
-
+                print(f"Frame {frame_idx}: Vehicle {tracker_id} ENTERED the segment.") # DEBUG PRINT
         # Process vehicles that are already inside the segment
         else:
             state = self.vehicle_state[tracker_id]
@@ -648,13 +648,16 @@ class AnalysisManager:
             # Check for flow line crossing
             if min(last_y, current_y) < self.flow_line_y < max(last_y, current_y):
                 self.interval_data[direction]['flow'] += 1
+                print(f"Frame {frame_idx}: Vehicle {tracker_id} crossed FLOW line. New flow: {self.interval_data[direction]['flow']}") # DEBUG PRINT
 
             # Check for segment exit
             if min(last_y, current_y) < self.exit_line_y < max(last_y, current_y):
                 travel_frames = frame_idx - state['entry_frame']
                 travel_time_sec = travel_frames / self.video_fps
                 self.interval_data[direction]['travel_times'].append(travel_time_sec)
+                print(f"Frame {frame_idx}: Vehicle {tracker_id} EXITED the segment.") # DEBUG PRINT
                 del self.vehicle_state[tracker_id] # Vehicle has exited
+                
 
             state['last_y'] = current_y
 
