@@ -175,9 +175,10 @@ class KalmanFilterManager:
             kf.correct(measurement)
             self.last_positions[tracker_id] = (x, y)
 
-        # Apply calibration and constraints in the correct order at the end
-        if calibration_func is not None:
-            self._calibrate_and_constrain_velocity(tracker_id, calibration_func)
+        # Apply calibration only if we have meaningful velocity
+        if tracker_id in self.initial_velocity_applied and self.initial_velocity_applied[tracker_id]:
+            if calibration_func is not None:
+                self._calibrate_and_constrain_velocity(tracker_id, calibration_func)
 
         return kf
 
@@ -186,26 +187,25 @@ class KalmanFilterManager:
         kf = self.kf_states[tracker_id]
         vx, vy = kf.statePost[2, 0], kf.statePost[3, 0]
 
-        # 1. Get the raw speed from the filter's current state.
+        # 1. Get the raw speed from the filter's current state
         raw_speed = math.hypot(vx, vy)
-        # Check if the raw speed meets the activation threshold before applying calibration.
+
+        # 2. Only apply calibration if speed is above activation threshold
         if raw_speed >= self.calibration_activation_speed:
-            # Apply the calibration function to the raw speed.
             calibrated_speed = calibration_func(raw_speed)
+            
+            # Prevent negative calibrated speeds
+            calibrated_speed = max(0.0, calibrated_speed)
         else:
-            # If below the threshold, the speed remains uncalibrated.
+            # Below threshold, use raw speed
             calibrated_speed = raw_speed
 
-        # 2. Apply the calibration function to the raw speed.
-        calibrated_speed = calibration_func(raw_speed)
-
-        # 3. Apply the minimum speed constraint to the FINAL calibrated speed.
+        # 3. Apply minimum speed constraint
         if calibrated_speed < self.min_speed_threshold:
-            # If the *calibrated* speed is too low, set velocity to 0.
             kf.statePost[2, 0] = 0.0
             kf.statePost[3, 0] = 0.0
         else:
-            # Otherwise, update the filter's velocity to match the valid calibrated speed.
+            # Update velocity to match calibrated speed
             if raw_speed > 0:
                 scale = calibrated_speed / raw_speed
                 kf.statePost[2, 0] *= scale
@@ -301,6 +301,9 @@ class KalmanFilterManager:
                 x1, y1, frame1 = positions[0]
                 x2, y2, frame2 = positions[1]
                 time_diff = (frame2 - frame1) * dt
+        # Clear contaminated speed history after setting initial velocity
+        self.speed_history[tracker_id].clear()
+        self.speed_history[tracker_id].append(speed_init)
 
         # Validate time difference
         if time_diff <= 0.001:

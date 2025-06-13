@@ -599,6 +599,19 @@ def main():
         # Default: no calibration
         logging.warning(f"Unknown calibration model type: {model_type}. Using no calibration.")
         calibration_func = lambda x: x
+    # Wrap the calibration function with safeguards
+    original_calibration_func = calibration_func
+
+    def calibration_func(raw_speed_m_s: float) -> float:
+        # Don't calibrate near-zero speeds
+        if raw_speed_m_s < config.CALIBRATION_ACTIVATION_SPEED:
+            return raw_speed_m_s
+        
+        # Apply original calibration
+        calibrated = original_calibration_func(raw_speed_m_s)
+        
+        # Prevent negative calibrated speeds
+        return max(0.0, calibrated)
     
     # 4. Verify calibration function is working (add after calibration_func definition, ~line 145)
     if config.ENABLE_TTC_DEBUG and model_type != "none":
