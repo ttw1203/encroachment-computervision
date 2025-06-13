@@ -124,7 +124,8 @@ class KalmanFilterManager:
         return kf
 
     def update_or_create(self, tracker_id: int, x: float, y: float, dt: float,
-                        frame_idx: int, confidence: float = 0.5) -> cv2.KalmanFilter:
+                        frame_idx: int, confidence: float = 0.5, 
+                        calibration_func: Optional[Callable[[float], float]] = None) -> cv2.KalmanFilter:
         """Update existing Kalman filter or create new one with enhanced initialization."""
         self.frame_number = frame_idx
         # Track initial positions for new trackers
@@ -171,10 +172,36 @@ class KalmanFilterManager:
             prediction = kf.predict()
             measurement = np.array([[x], [y]], np.float32)
             kf.correct(measurement)
-            self._apply_velocity_constraints(tracker_id, dt)
             self.last_positions[tracker_id] = (x, y)
 
+        # Apply calibration and constraints in the correct order at the end
+        if calibration_func is not None:
+            self._calibrate_and_constrain_velocity(tracker_id, calibration_func)
+
         return kf
+
+    def _calibrate_and_constrain_velocity(self, tracker_id: int, calibration_func: Callable[[float], float]):
+        """Apply calibration and constraints in the correct order."""
+        kf = self.kf_states[tracker_id]
+        vx, vy = kf.statePost[2, 0], kf.statePost[3, 0]
+
+        # 1. Get the raw speed from the filter's current state.
+        raw_speed = math.hypot(vx, vy)
+
+        # 2. Apply the calibration function to the raw speed.
+        calibrated_speed = calibration_func(raw_speed)
+
+        # 3. Apply the minimum speed constraint to the FINAL calibrated speed.
+        if calibrated_speed < self.min_speed_threshold:
+            # If the *calibrated* speed is too low, set velocity to 0.
+            kf.statePost[2, 0] = 0.0
+            kf.statePost[3, 0] = 0.0
+        else:
+            # Otherwise, update the filter's velocity to match the valid calibrated speed.
+            if raw_speed > 0:
+                scale = calibrated_speed / raw_speed
+                kf.statePost[2, 0] *= scale
+                kf.statePost[3, 0] *= scale
 
     def is_ttc_eligible(self, tracker_id: int, current_frame: int) -> bool:
         """Check if tracker is eligible for TTC calculation based on safeguards."""
@@ -319,50 +346,6 @@ class KalmanFilterManager:
             initial_direction = math.atan2(vy_init, vx_init)
             self.direction_history[tracker_id].append(initial_direction)
 
-    # [Rest of the existing methods remain unchanged: _apply_velocity_constraints,
-    # _stabilize_direction, apply_speed_calibration, _calculate_ema_speed,
-    # get_smoothed_velocity, predict_future_positions, get_state, remove_tracker, get_all_states]
-
-    def _apply_velocity_constraints(self, tracker_id: int, dt: float):
-        """Apply physical constraints to velocity to prevent unrealistic values."""
-        kf = self.kf_states[tracker_id]
-        state = kf.statePost.flatten()
-        x, y, vx, vy = state
-
-        # Calculate current speed
-        current_speed = math.hypot(vx, vy)
-
-        # Store in history for smoothing
-        self.speed_history[tracker_id].append(current_speed)
-
-        # Apply minimum speed threshold
-        if current_speed < self.min_speed_threshold:
-            kf.statePost[2, 0] = 0.0
-            kf.statePost[3, 0] = 0.0
-            return
-
-        # Check for maximum acceleration constraint
-        if len(self.speed_history[tracker_id]) > 1:
-            prev_speed = self.speed_history[tracker_id][-2]
-            acceleration = (current_speed - prev_speed) / dt
-
-            if abs(acceleration) > self.max_acceleration:
-                # Limit the speed change
-                max_speed_change = self.max_acceleration * dt
-                if acceleration > 0:
-                    new_speed = prev_speed + max_speed_change
-                else:
-                    new_speed = prev_speed - max_speed_change
-
-                # Scale velocity components
-                if current_speed > 0:
-                    scale = new_speed / current_speed
-                    kf.statePost[2, 0] = vx * scale
-                    kf.statePost[3, 0] = vy * scale
-
-        # Apply direction stabilization
-        self._stabilize_direction(tracker_id)
-
     def _stabilize_direction(self, tracker_id: int):
         """Stabilize direction to prevent sudden reversals."""
         kf = self.kf_states[tracker_id]
@@ -386,29 +369,6 @@ class KalmanFilterManager:
                     speed = math.hypot(vx, vy)
                     kf.statePost[2, 0] = speed * math.cos(median_direction)
                     kf.statePost[3, 0] = speed * math.sin(median_direction)
-
-    def apply_speed_calibration(self, tracker_id: int, calibration_func: Callable[[float], float]) -> None:
-        """Apply speed calibration with smoothing to prevent fluctuations."""
-        if tracker_id not in self.kf_states:
-            return
-
-        kf = self.kf_states[tracker_id]
-        state = kf.statePost.flatten()
-        x, y, vx, vy = state
-
-        raw_speed = math.hypot(vx, vy)
-
-        if raw_speed > self.min_speed_threshold:
-            if len(self.speed_history[tracker_id]) > 0:
-                smoothed_speed = self._calculate_ema_speed(tracker_id, raw_speed)
-                calibrated_speed = calibration_func(smoothed_speed)
-
-                if smoothed_speed > 0:
-                    scale_factor = calibrated_speed / smoothed_speed
-                    damping_factor = 0.7
-                    smoothed_scale = 1.0 + (scale_factor - 1.0) * damping_factor
-                    kf.statePost[2, 0] = vx * smoothed_scale
-                    kf.statePost[3, 0] = vy * smoothed_scale
 
     def _calculate_ema_speed(self, tracker_id: int, current_speed: float, alpha: float = 0.3) -> float:
         """Calculate exponential moving average of speed."""
