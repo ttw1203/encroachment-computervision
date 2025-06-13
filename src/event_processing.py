@@ -606,7 +606,7 @@ class AnalysisManager:
 
         # Calculate the Y coordinates for the entry and exit lines
         # The exit line is placed at the end of the ROI, minus the buffer
-        self.exit_line_y = roi_height_m - buffer_m
+        self.exit_line_y = roi_height_m - self.buffer_m
         # The entry line is placed based on the desired segment length
         self.entry_line_y = self.exit_line_y - self.segment_length_m
 
