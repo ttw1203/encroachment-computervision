@@ -179,7 +179,6 @@ class DetectionTracker:
 
             # RF-DETR predict method handles NMS internally and returns supervision.Detections
             # The threshold parameter handles confidence filtering internally
-            self.model.optimize_for_inference()  # Ensure model is optimized for inference
             detections = self.model.predict(frame_rgb, threshold=self.confidence_threshold)
 
             return detections
