@@ -50,6 +50,10 @@ class Config:
         self.PIECEWISE_A2 = float(os.getenv("PIECEWISE_A2", "0.5303"))  # Slope for x > threshold
         self.PIECEWISE_B2 = float(os.getenv("PIECEWISE_B2", "2.2244"))  # Intercept for x > threshold
 
+        # New parameters for traffic flow and SMS analysis
+        self.ANALYSIS_INTERVAL_MINUTES = int(os.getenv("ANALYSIS_INTERVAL_MINUTES", "5"))
+        self.SMS_SEGMENT_LENGTH = float(os.getenv("SMS_SEGMENT_LENGTH", "40.0"))
+
         # ============================================
         # ENHANCED KALMAN FILTER INITIALIZATION PARAMETERS
         # ============================================

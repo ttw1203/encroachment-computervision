@@ -159,6 +159,18 @@ class IOManager:
         df.to_csv(csv_file, index=False)
         return csv_file
 
+    def save_traffic_analysis(self, analysis_results: List[Dict]) -> Path:
+        """Save traffic analysis results to CSV."""
+        if not analysis_results:
+            print("[IOManager] No traffic analysis data to save.")
+            return None
+
+        df = pd.DataFrame(analysis_results)
+        csv_file = self.output_dir / f"traffic_analysis_{self.timestamp}.csv"
+        df.to_csv(csv_file, index=False)
+        print(f"[IOManager] Traffic analysis saved to: {csv_file}")
+        return csv_file
+
     @staticmethod
     def dump_zones_png(video_path: str, output_path: str,
                        left_zone: np.ndarray, right_zone: np.ndarray) -> None:

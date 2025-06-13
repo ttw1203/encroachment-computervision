@@ -4,6 +4,8 @@ import math
 import numpy as np
 from dataclasses import dataclass
 from src.geometry_and_transforms import line_side
+import supervision as sv
+from collections import defaultdict
 
 
 @dataclass
@@ -586,3 +588,99 @@ class EventProcessor:
         st['side_prev'] = curr_side
 
         return result
+
+
+class AnalysisManager:
+    def __init__(self, config, video_fps: float):
+        # Store config and constants
+        self.video_fps = video_fps
+        self.segment_length_m = config.SMS_SEGMENT_LENGTH
+        self.segment_width_m = config.get_source_target_points()[1][1][0] # Target Width
+        self.analysis_interval_sec = config.ANALYSIS_INTERVAL_MINUTES * 60
+
+        # Define segment geometry based on our discussion (Y=35 to Y=75)
+        y_start, y_end = 35.0, 75.0
+        self.entry_line_y = y_start
+        self.exit_line_y = y_end
+        self.flow_line_y = (y_start + y_end) / 2 # Midpoint at Y=55
+
+        # State tracking for vehicles within the segment
+        self.vehicle_state = {} # {tracker_id: {'entry_frame': int, 'last_y': float}}
+
+        # Data aggregation for the current interval
+        self.current_interval_start_frame = 0
+        self.interval_data = defaultdict(lambda: {'travel_times': [], 'flow': 0})
+        self.encroachment_in_interval = False
+
+        # Final results storage
+        self.results = []
+
+    def process_vehicle(self, tracker_id: int, world_pos: tuple, vy: float, frame_idx: int):
+        current_y = world_pos[1]
+        direction = 'incoming' if vy > 0 else 'outgoing'
+
+        # Check for segment entry
+        if tracker_id not in self.vehicle_state:
+            last_y = current_y - (vy / self.video_fps) # Estimate previous frame's Y
+            if min(last_y, current_y) < self.entry_line_y < max(last_y, current_y):
+                self.vehicle_state[tracker_id] = {'entry_frame': frame_idx, 'last_y': current_y}
+
+        # Process vehicles that are already inside the segment
+        else:
+            state = self.vehicle_state[tracker_id]
+            last_y = state['last_y']
+
+            # Check for flow line crossing
+            if min(last_y, current_y) < self.flow_line_y < max(last_y, current_y):
+                self.interval_data[direction]['flow'] += 1
+
+            # Check for segment exit
+            if min(last_y, current_y) < self.exit_line_y < max(last_y, current_y):
+                travel_frames = frame_idx - state['entry_frame']
+                travel_time_sec = travel_frames / self.video_fps
+                self.interval_data[direction]['travel_times'].append(travel_time_sec)
+                del self.vehicle_state[tracker_id] # Vehicle has exited
+
+            state['last_y'] = current_y
+
+    def set_encroachment_flag(self):
+        self.encroachment_in_interval = True
+
+    def finalize_interval(self, frame_idx: int):
+        # Calculate Space Mean Speed for both directions
+        sms_incoming, sms_outgoing = 0.0, 0.0
+
+        # Incoming SMS
+        if self.interval_data['incoming']['travel_times']:
+            sum_travel_times = sum(self.interval_data['incoming']['travel_times'])
+            num_vehicles = len(self.interval_data['incoming']['travel_times'])
+            sms_incoming = (num_vehicles * self.segment_length_m) / sum_travel_times * 3.6 # km/h
+
+        # Outgoing SMS
+        if self.interval_data['outgoing']['travel_times']:
+            sum_travel_times = sum(self.interval_data['outgoing']['travel_times'])
+            num_vehicles = len(self.interval_data['outgoing']['travel_times'])
+            sms_outgoing = (num_vehicles * self.segment_length_m) / sum_travel_times * 3.6 # km/h
+
+        # Format results
+        start_sec = self.current_interval_start_frame / self.video_fps
+        end_sec = frame_idx / self.video_fps
+
+        self.results.append({
+            'time_interval': f"{int(start_sec//60):02}:{int(start_sec%60):02}-{int(end_sec//60):02}:{int(end_sec%60):02}",
+            'timestamp_start': start_sec,
+            'timestamp_end': end_sec,
+            'flow_segment_distance_m': self.segment_length_m,
+            'sms_segment_distance_m': self.segment_length_m,
+            'flow_incoming_veh_per_interval': self.interval_data['incoming']['flow'],
+            'flow_outgoing_veh_per_interval': self.interval_data['outgoing']['flow'],
+            'sms_incoming_kmh': round(sms_incoming, 2),
+            'sms_outgoing_kmh': round(sms_outgoing, 2),
+            'encroachment_detected': 1 if self.encroachment_in_interval else 0
+        })
+
+        # Reset for next interval
+        self.current_interval_start_frame = frame_idx + 1
+        self.interval_data.clear()
+        self.encroachment_in_interval = False
+        self.vehicle_state.clear() # Clear states for vehicles that didn't exit

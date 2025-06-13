@@ -17,7 +17,7 @@ from src.kalman_filter import KalmanFilterManager
 from src.zone_management import ZoneManager
 from src.geometry_and_transforms import ViewTransformer, line_side
 from src.annotators import AnnotationManager
-from src.event_processing import EventProcessor
+from src.event_processing import EventProcessor, AnalysisManager
 from src.io_utils import IOManager
 
 
@@ -642,6 +642,10 @@ def main():
     # Get video info
     video_info = sv.VideoInfo.from_video_path(video_path=args.source_video_path)
 
+    # After video_info is defined, instantiate the analysis manager
+    analysis_manager = AnalysisManager(config, video_info.fps)
+    analysis_interval_frames = config.ANALYSIS_INTERVAL_MINUTES * 60 * video_info.fps
+
     # Calculate clip frames
     if config.CLIP_SECONDS <= 0:  # For example, 0 or negative means full video
         clip_frames = video_info.total_frames
@@ -807,6 +811,10 @@ def main():
             for event in new_enc_events:
                 event['class_name'] = detector_tracker.get_class_name(event['class_id'])
 
+            # After an encroachment is detected (new_enc_events), call:
+            if new_enc_events:
+                analysis_manager.set_encroachment_flag()
+
             # Update tracking state
             active_ids = set(detections.tracker_id.tolist() if len(detections) else [])
 
@@ -828,7 +836,8 @@ def main():
                 kf = kf_manager.update_or_create(tracker_id, x, y, dt, frame_idx, confidence, calibration_func)
 
                 # Get current state (now with calibrated and stabilized velocity)
-                Xf, Yf, _, _ = kf.statePost.flatten()
+                Xf, Yf, Vx, Vy = kf.statePost.flatten()
+                analysis_manager.process_vehicle(tracker_id, (Xf, Yf), Vy, frame_idx)
 
                 # Get smoothed velocity for display
                 Vx_smooth, Vy_smooth = kf_manager.get_smoothed_velocity(tracker_id)
@@ -925,6 +934,10 @@ def main():
                     future_positions_array = np.array(future_positions, dtype=np.float32)
                     predicted_pixels = view_transformer.inverse_transform_points(future_positions_array)
                     future_coordinates[tracker_id] = predicted_pixels.tolist()
+
+            # At the end of the main for loop (just before sink.write_frame), add the logic to finalize the interval:
+            if frame_idx > 0 and (frame_idx + 1) % analysis_interval_frames == 0:
+                analysis_manager.finalize_interval(frame_idx)
 
             # Signal line crossings for visual feedback if advanced counting enabled
             crossing_detected = False
@@ -1064,6 +1077,10 @@ def main():
                 # print(f"  Total trackers: {total_trackers}")
                 # print(f"  TTC-eligible trackers: {eligible_trackers}")
                 # print(f"  Safeguard effectiveness: {((total_trackers - eligible_trackers) / max(total_trackers, 1)) * 100:.1f}% filtered")
+
+    # After the loop, finalize the last partial interval and save the results:
+    analysis_manager.finalize_interval(frame_idx) # Finalize the last interval
+    io_manager.save_traffic_analysis(analysis_manager.results)
 
     # Save results
     bar.close()
