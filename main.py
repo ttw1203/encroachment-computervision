@@ -809,12 +809,9 @@ def main():
                 # Get detection confidence for enhanced Kalman filter
                 confidence = float(detections.confidence[det_idx])
 
-                # Update Kalman filter with confidence information
+                # Update Kalman filter with confidence information and calibration function
                 dt = 1 / video_info.fps
-                kf = kf_manager.update_or_create(tracker_id, x, y, dt, frame_idx, confidence)
-
-                # Apply speed calibration with stability
-                kf_manager.apply_speed_calibration(tracker_id, calibration_func)
+                kf = kf_manager.update_or_create(tracker_id, x, y, dt, frame_idx, confidence, calibration_func)
 
                 # Get current state (now with calibrated and stabilized velocity)
                 Xf, Yf, _, _ = kf.statePost.flatten()
