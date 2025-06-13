@@ -215,3 +215,13 @@ The system generates a set of timestamped CSV files in the specified `RESULTS_OU
 │       ├── zones-mirpur.yaml     # Example zone configuration
 │       └── vehicle_dimensions.json # Real-world dimensions for AABB check
 └── results/                      # Default output directory for CSVs and videos
+
+## 🙏 Acknowledgments & Citations
+
+This project stands on the shoulders of giants. We gratefully acknowledge the developers of the following open-source libraries and the researchers behind the core algorithms, which are fundamental to this work:
+
+* **[Ultralytics YOLO](https://github.com/ultralytics/ultralytics):** For the powerful and efficient YOLO object detection models. The YOLOv8 model is licensed under AGPL-3.0.
+* **[Roboflow RF-DETR](https://github.com/roboflow/rf-detr):** For the state-of-the-art transformer-based object detection model, RF-DETR.
+* **[Roboflow Supervision](https://github.com/roboflow/supervision):** An indispensable toolkit for many computer vision tasks used extensively throughout this project.
+* **[BoxMOT](https://github.com/Jinghe-Me/boxmot):** For providing robust implementations of tracking algorithms like StrongSORT and ByteTrack.
+* **[OpenCV](https://github.com/opencv/opencv):** The foundational library for computer vision operations.
