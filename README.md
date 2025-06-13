@@ -1,4 +1,4 @@
-# Real-Time Traffic Analysis and Safety Assessment System
+# Analyzing operational and safety impact of encroachments through video analytics for heterogeneous traffic
 
 This project is a comprehensive computer vision pipeline designed for in-depth, real-time analysis of traffic dynamics from a video feed. The primary goal is to move beyond simple object detection and provide a multi-faceted understanding of traffic behavior. The system quantifies vehicle movement, identifies potentially hazardous situations, and analyzes traffic flow characteristics like speed and volume.
 
@@ -216,6 +216,7 @@ The system generates a set of timestamped CSV files in the specified `RESULTS_OU
 │       ├── zones-mirpur.yaml     # Example zone configuration
 │       └── vehicle_dimensions.json # Real-world dimensions for AABB check
 └── results/                      # Default output directory for CSVs and videos
+```
 
 ## 🙏 Acknowledgments & Citations
 
