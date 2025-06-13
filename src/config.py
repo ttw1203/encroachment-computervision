@@ -53,6 +53,7 @@ class Config:
         # New parameters for traffic flow and SMS analysis
         self.ANALYSIS_INTERVAL_MINUTES = int(os.getenv("ANALYSIS_INTERVAL_MINUTES", "5"))
         self.SMS_SEGMENT_LENGTH = float(os.getenv("SMS_SEGMENT_LENGTH", "40.0"))
+        self.BUFFER_LENGTH = float(os.getenv("BUFFER_LENGTH", "0.2"))  # meters
 
         # ============================================
         # ENHANCED KALMAN FILTER INITIALIZATION PARAMETERS
