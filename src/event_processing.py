@@ -595,17 +595,32 @@ class AnalysisManager:
         # Store config and constants
         self.video_fps = video_fps
         self.segment_length_m = config.SMS_SEGMENT_LENGTH
-        self.segment_width_m = config.get_source_target_points()[1][1][0] # Target Width
         self.analysis_interval_sec = config.ANALYSIS_INTERVAL_MINUTES * 60
 
-        # Define segment geometry based on our discussion (Y=35 to Y=75)
-        y_start, y_end = 35.0, 75.0
-        self.entry_line_y = y_start
-        self.exit_line_y = y_end
-        self.flow_line_y = (y_start + y_end) / 2 # Midpoint at Y=55
+        # Get the total height of the bird's-eye-view ROI from the config
+        _, target_points = config.get_source_target_points()
+        roi_height_m = target_points[2][1]  # Assumes target_points are [[0,0], [W,0], [W,H], [0,H]]
+
+        # Define the buffer from the edge closest to the camera
+        buffer_m = 5.0
+
+        # Calculate the Y coordinates for the entry and exit lines
+        # The exit line is placed at the end of the ROI, minus the buffer
+        self.exit_line_y = roi_height_m - buffer_m
+        # The entry line is placed based on the desired segment length
+        self.entry_line_y = self.exit_line_y - self.segment_length_m
+
+        # Add a safeguard for cases where the ROI is shorter than the segment + buffer
+        if self.entry_line_y < 0:
+            self.entry_line_y = 0
+            print(f"Warning: Analysis segment was too long for the defined ROI height. "
+                f"It has been adjusted to start at Y=0.")
+
+        # The flow counting line remains at the midpoint of the calculated segment
+        self.flow_line_y = (self.entry_line_y + self.exit_line_y) / 2
 
         # State tracking for vehicles within the segment
-        self.vehicle_state = {} # {tracker_id: {'entry_frame': int, 'last_y': float}}
+        self.vehicle_state = {}  # {tracker_id: {'entry_frame': int, 'last_y': float}}
 
         # Data aggregation for the current interval
         self.current_interval_start_frame = 0
