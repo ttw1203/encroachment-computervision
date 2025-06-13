@@ -633,33 +633,46 @@ class AnalysisManager:
     def process_vehicle(self, tracker_id: int, world_pos: tuple, vy: float, frame_idx: int):
         current_y = world_pos[1]
         direction = 'incoming' if vy > 0 else 'outgoing'
+        # Estimate the vehicle's position in the previous frame to establish a line segment for crossing detection
+        last_y_estimate = current_y - (vy / self.video_fps)
 
-        # Check for segment entry
+        # 1. Check for segment entry from either side for new vehicles
         if tracker_id not in self.vehicle_state:
-            last_y = current_y - (vy / self.video_fps) # Estimate previous frame's Y
-            if min(last_y, current_y) < self.entry_line_y < max(last_y, current_y):
-                self.vehicle_state[tracker_id] = {'entry_frame': frame_idx, 'last_y': current_y}
-                print(f"Frame {frame_idx}: Vehicle {tracker_id} ENTERED the segment.") # DEBUG PRINT
-        # Process vehicles that are already inside the segment
+            # Entered from the standard 'entry' side
+            if min(last_y_estimate, current_y) < self.entry_line_y < max(last_y_estimate, current_y):
+                self.vehicle_state[tracker_id] = {'entry_frame': frame_idx, 'entry_line': 'entry', 'last_y': current_y, 'flow_counted': False}
+            # Entered from the 'exit' side (i.e., an outgoing vehicle)
+            elif min(last_y_estimate, current_y) < self.exit_line_y < max(last_y_estimate, current_y):
+                self.vehicle_state[tracker_id] = {'entry_frame': frame_idx, 'entry_line': 'exit', 'last_y': current_y, 'flow_counted': False}
+
+        # 2. Process vehicles already being tracked within the segment
         else:
             state = self.vehicle_state[tracker_id]
             last_y = state['last_y']
 
-            # Check for flow line crossing
-            if min(last_y, current_y) < self.flow_line_y < max(last_y, current_y):
+            # A. Check for flow-line crossing (can only happen once)
+            if not state['flow_counted'] and min(last_y, current_y) < self.flow_line_y < max(last_y, current_y):
                 self.interval_data[direction]['flow'] += 1
-                print(f"Frame {frame_idx}: Vehicle {tracker_id} crossed FLOW line. New flow: {self.interval_data[direction]['flow']}") # DEBUG PRINT
+                state['flow_counted'] = True
 
-            # Check for segment exit
-            if min(last_y, current_y) < self.exit_line_y < max(last_y, current_y):
+            # B. Check for the corresponding exit line to complete the SMS journey
+            # Vehicle entered at 'entry' and is now crossing 'exit'
+            if state['entry_line'] == 'entry' and min(last_y, current_y) < self.exit_line_y < max(last_y, current_y):
                 travel_frames = frame_idx - state['entry_frame']
-                travel_time_sec = travel_frames / self.video_fps
-                self.interval_data[direction]['travel_times'].append(travel_time_sec)
-                print(f"Frame {frame_idx}: Vehicle {tracker_id} EXITED the segment.") # DEBUG PRINT
-                del self.vehicle_state[tracker_id] # Vehicle has exited
-                
+                if travel_frames > 0:
+                    self.interval_data['incoming']['travel_times'].append(travel_frames / self.video_fps)
+                del self.vehicle_state[tracker_id]
 
-            state['last_y'] = current_y
+            # Vehicle entered at 'exit' and is now crossing 'entry'
+            elif state['entry_line'] == 'exit' and min(last_y, current_y) < self.entry_line_y < max(last_y, current_y):
+                travel_frames = frame_idx - state['entry_frame']
+                if travel_frames > 0:
+                    self.interval_data['outgoing']['travel_times'].append(travel_frames / self.video_fps)
+                del self.vehicle_state[tracker_id]
+
+            # C. Update the vehicle's last known position if it's still in the segment
+            if tracker_id in self.vehicle_state:
+                self.vehicle_state[tracker_id]['last_y'] = current_y
 
     def set_encroachment_flag(self):
         self.encroachment_in_interval = True
