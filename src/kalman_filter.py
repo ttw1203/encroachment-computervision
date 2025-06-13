@@ -16,7 +16,7 @@ class KalmanFilterManager:
                  initial_velocity_uncertainty: float = 1.0, position_uncertainty: float = 0.5,
                  ttc_burn_in_frames: int = 10, ttc_min_velocity: float = 0.3,
                  ttc_min_confidence: float = 0.75, video_fps: float = 30.0,
-                 max_age_seconds: float = 2.0):
+                 max_age_seconds: float = 2.0, calibration_activation_speed: float = 1.0):
         """Initialize the Kalman filter manager with stability parameters and TTC safeguards.
 
         Args:
@@ -46,6 +46,7 @@ class KalmanFilterManager:
         self.initial_positions: Dict[int, List[Tuple[float, float, int]]] = {}
         self.initial_velocity_frames = initial_velocity_frames
         self.initial_velocity_applied: Dict[int, bool] = {}
+        self.calibration_activation_speed = calibration_activation_speed  # Speed threshold for calibration
 
         # NEW: Enhanced initialization parameters
         self.initial_velocity_uncertainty = initial_velocity_uncertainty  # High uncertainty for new tracks
@@ -187,6 +188,13 @@ class KalmanFilterManager:
 
         # 1. Get the raw speed from the filter's current state.
         raw_speed = math.hypot(vx, vy)
+        # Check if the raw speed meets the activation threshold before applying calibration.
+        if raw_speed >= self.calibration_activation_speed:
+            # Apply the calibration function to the raw speed.
+            calibrated_speed = calibration_func(raw_speed)
+        else:
+            # If below the threshold, the speed remains uncalibrated.
+            calibrated_speed = raw_speed
 
         # 2. Apply the calibration function to the raw speed.
         calibrated_speed = calibration_func(raw_speed)

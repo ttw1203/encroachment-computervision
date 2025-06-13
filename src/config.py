@@ -40,6 +40,8 @@ class Config:
         self.SPEED_CALIBRATION_MODEL_A = float(os.getenv("SPEED_CALIBRATION_MODEL_A", "1.0"))
         self.SPEED_CALIBRATION_MODEL_B = float(os.getenv("SPEED_CALIBRATION_MODEL_B", "0.0"))
         self.SPEED_CALIBRATION_POLY_COEFFS = os.getenv("SPEED_CALIBRATION_POLY_COEFFS", "0.0,1.0")
+        # Threshold to activate speed calibration
+        self.CALIBRATION_ACTIVATION_SPEED = float(os.getenv("CALIBRATION_ACTIVATION_SPEED", "1.0")) # m/s
         
         # Piecewise linear regression parameters
         self.PIECEWISE_THRESH = float(os.getenv("PIECEWISE_THRESH", "5.16"))

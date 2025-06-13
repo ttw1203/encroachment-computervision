@@ -665,7 +665,8 @@ def main():
         position_uncertainty=args.initial_position_uncertainty,
         ttc_burn_in_frames=args.ttc_burn_in_frames,
         ttc_min_velocity=args.ttc_min_velocity,
-        ttc_min_confidence=args.ttc_min_track_confidence
+        ttc_min_confidence=args.ttc_min_track_confidence,
+        calibration_activation_speed=config.CALIBRATION_ACTIVATION_SPEED
     )
     # 3. Add debug logging to verify values are passed correctly (optional)
     if config.ENABLE_TTC_DEBUG:
