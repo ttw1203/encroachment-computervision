@@ -602,7 +602,7 @@ class AnalysisManager:
         roi_height_m = target_points[2][1]  # Assumes target_points are [[0,0], [W,0], [W,H], [0,H]]
 
         # Define the buffer from the edge closest to the camera
-        buffer_m = 1.5
+        buffer_m = 0.2
 
         # Calculate the Y coordinates for the entry and exit lines
         # The exit line is placed at the end of the ROI, minus the buffer
