@@ -1043,13 +1043,13 @@ def main():
                 print(f"  Total validated events: {debug_info.get('total_events', 0)}")
 
                 # Print TTC safeguard statistics
-                total_trackers = len(kf_manager.get_all_states())
-                eligible_trackers = sum(1 for tid in kf_manager.get_all_states().keys()
-                                        if kf_manager.is_ttc_eligible(tid, frame_idx))
-                print(f"TTC Safeguard Statistics:")
-                print(f"  Total trackers: {total_trackers}")
-                print(f"  TTC-eligible trackers: {eligible_trackers}")
-                print(f"  Safeguard effectiveness: {((total_trackers - eligible_trackers) / max(total_trackers, 1)) * 100:.1f}% filtered")
+                # total_trackers = len(kf_manager.get_all_states())
+                # eligible_trackers = sum(1 for tid in kf_manager.get_all_states().keys()
+                #                         if kf_manager.is_ttc_eligible(tid, frame_idx))
+                # print(f"TTC Safeguard Statistics:")
+                # print(f"  Total trackers: {total_trackers}")
+                # print(f"  TTC-eligible trackers: {eligible_trackers}")
+                # print(f"  Safeguard effectiveness: {((total_trackers - eligible_trackers) / max(total_trackers, 1)) * 100:.1f}% filtered")
 
     # Save results
     bar.close()
