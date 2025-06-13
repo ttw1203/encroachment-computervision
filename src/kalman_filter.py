@@ -178,6 +178,11 @@ class KalmanFilterManager:
         # Apply calibration and constraints in the correct order at the end
         if calibration_func is not None:
             self._calibrate_and_constrain_velocity(tracker_id, calibration_func)
+        # Get the final speed from the state and update the history for smoothing
+        final_vx = self.kf_states[tracker_id].statePost[2, 0]
+        final_vy = self.kf_states[tracker_id].statePost[3, 0]
+        final_speed = math.hypot(final_vx, final_vy)
+        self.speed_history[tracker_id].append(final_speed)
 
         return kf
 
