@@ -189,6 +189,7 @@ The system generates a set of timestamped CSV files in the specified `RESULTS_OU
 
 2.  **Install dependencies:**
     ```bash
+    python -m pip install --upgrade pip
     pip install -r requirements.txt
     ```
     *Note: For RF-DETR support, ensure `rfdetr` is installed: `pip install rfdetr>=1.0.0`*
