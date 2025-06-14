@@ -35,8 +35,8 @@ source_points:
   - [4554, 2160]
   - [-190, 2160]
 
-target_width: 19
-target_height: 58.3
+target_width: 15
+target_height: 55
 
 #[[ 0.0000  0.0000]
 # [19.0063  0.0000]
