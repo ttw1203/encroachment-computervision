@@ -49,7 +49,7 @@ class ZoneManager:
         return self._mask_left, self._mask_right
 
     def check_encroachment(self, detections: sv.Detections, frame_idx: int,
-                          kf_states: Dict) -> List[Dict]:
+                      kf_states: Dict) -> List[Dict]:
         """Check for encroachment events and update state."""
         # Find which detections are inside zones
         in_left = self.left_zone.trigger(detections)
@@ -98,12 +98,19 @@ class ZoneManager:
                         self.enc_id_to_zone_side[tid] = event['zone']
             else:
                 # Vehicle left zone
+                if tid in self.enc_active_ids:
+                    # Find the event to update
+                    for event in reversed(self.enc_events):
+                        if event['tracker_id'] == tid and 't_exit_s' not in event:
+                            event['t_exit_s'] = frame_idx / self.video_fps
+                            break
+
+                # Clean up the vehicle's current state regardless
                 self.enc_state.pop(tid, None)
                 self.enc_active_ids.discard(tid)
                 self.enc_id_to_zone_side.pop(tid, None)
 
         return new_events
-
     def blend_zone(self, frame: np.ndarray, mask: np.ndarray,
                    colour: Tuple[int, int, int], alpha: float = 0.35) -> None:
         """In-place alpha blend of colour wherever mask == 255."""
