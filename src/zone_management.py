@@ -111,6 +111,28 @@ class ZoneManager:
                 self.enc_id_to_zone_side.pop(tid, None)
 
         return new_events
+
+    def handle_tracker_removal(self, tracker_id: int, exit_timestamp: float):
+        """Handle tracker removal by updating any active encroachment events with exit timestamp.
+        
+        Args:
+            tracker_id: The ID of the tracker being removed
+            exit_timestamp: The timestamp (in seconds) when the tracker was removed
+        """
+        if tracker_id in self.enc_active_ids:
+            # Remove from active encroachment IDs
+            self.enc_active_ids.discard(tracker_id)
+            
+            # Find the most recent encroachment event for this tracker and add exit timestamp
+            for event in reversed(self.enc_events):
+                if event['tracker_id'] == tracker_id and 't_exit_s' not in event:
+                    event['t_exit_s'] = exit_timestamp
+                    break
+        
+        # Clean up any remaining state for this tracker
+        self.enc_state.pop(tracker_id, None)
+        self.enc_id_to_zone_side.pop(tracker_id, None)
+
     def blend_zone(self, frame: np.ndarray, mask: np.ndarray,
                    colour: Tuple[int, int, int], alpha: float = 0.35) -> None:
         """In-place alpha blend of colour wherever mask == 255."""

@@ -958,6 +958,8 @@ def main():
                 future_coordinates.pop(tid, None)
                 last_seen_frame.pop(tid, None)
                 previous_detections.pop(tid, None)
+                # Notify zone manager about tracker removal
+                zone_manager.handle_tracker_removal(tid, frame_idx / video_info.fps)
 
             # Clean up double-line counter state if enabled
             if advanced_counting_enabled:
