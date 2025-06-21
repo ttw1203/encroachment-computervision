@@ -220,6 +220,29 @@ class EnhancedTTCProcessor:
             tracker_i, tracker_j, xi, yi, vxi, vyi, xj, yj, vxj, vyj, t_star):
             return None
 
+        # Determine leader/follower for semantic clarity, even in bidirectional traffic.
+        # We check if tracker_j is "in front of" tracker_i from tracker_i's perspective.
+        
+        # Define the vector from vehicle i to vehicle j
+        vec_ij = np.array([xj - xi, yj - yi])
+        
+        # Define the velocity vector of vehicle i (the first vehicle in the pair)
+        vel_i = np.array([vxi, vyi])
+        
+        # Check if speeds are significant enough to have a clear direction
+        speed_i = math.hypot(vxi, vyi)
+        
+        # Project the relative position vector onto vehicle i's velocity vector.
+        # A positive dot product means j is generally "in front" of i.
+        if speed_i > 0.1 and np.dot(vec_ij, vel_i) > 0:
+            # j is in front of i, so i is the follower
+            follower_id = tracker_i
+            leader_id = tracker_j
+        else:
+            # Otherwise, j is behind or beside i (or i is stopped), so treat i as the leader.
+            follower_id = tracker_j
+            leader_id = tracker_i
+
         # All filters passed - create validated TTC event
         rel_speed = math.hypot(vx, vy)
         confidence_score = (conf_i + conf_j) / 2.0
@@ -227,8 +250,8 @@ class EnhancedTTCProcessor:
 
         return TTCEvent(
             frame_idx=frame_idx,
-            follower_id=tracker_i,
-            leader_id=tracker_j,
+            follower_id=follower_id, # Use new meaningful assignment
+            leader_id=leader_id,     # Use new meaningful assignment
             ttc_seconds=t_star,
             closest_distance=d_closest,
             relative_speed=rel_speed,
@@ -237,6 +260,8 @@ class EnhancedTTCProcessor:
             event_id=event_id,
             kalman_eligible=True  # Always true if we reach this point
         )
+
+        
 
     # [Include all the existing filter methods from the previous implementation]
     def _apply_hysteresis_filter(self, pair_key: Tuple[int, int],
