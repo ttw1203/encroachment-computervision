@@ -46,7 +46,10 @@ class EnhancedTTCProcessor:
         self.ttc_max_relative_angle = config.get('TTC_MAX_RELATIVE_ANGLE', 150)
         self.cleanup_timeout_frames = config.get('TTC_CLEANUP_TIMEOUT_FRAMES', 90)
 
-        # Vehicle dimensions for AABB collision detection
+        # NEW: Path separation buffer for lateral clearance analysis
+        self.ttc_lateral_separation_buffer = config.get('TTC_LATERAL_SEPARATION_BUFFER', 0.3)
+
+        # Vehicle dimensions for collision detection
         self.vehicle_dimensions = config.get('VEHICLE_DIMENSIONS', {
             'car': {'length': 4.5, 'width': 1.8},
             'truck': {'length': 8.0, 'width': 2.5},
@@ -215,33 +218,10 @@ class EnhancedTTCProcessor:
         if rel_angle is None:
             return None
 
-        # FILTER 5: Vehicle Dimension Collision (AABB)
-        if not self._apply_vehicle_dimension_filter(
+        # FILTER 5: Path Separation Analysis (REPLACES Vehicle Dimension Collision)
+        if not self._apply_path_separation_filter(
             tracker_i, tracker_j, xi, yi, vxi, vyi, xj, yj, vxj, vyj, t_star):
             return None
-
-        # Determine leader/follower for semantic clarity, even in bidirectional traffic.
-        # We check if tracker_j is "in front of" tracker_i from tracker_i's perspective.
-        
-        # Define the vector from vehicle i to vehicle j
-        vec_ij = np.array([xj - xi, yj - yi])
-        
-        # Define the velocity vector of vehicle i (the first vehicle in the pair)
-        vel_i = np.array([vxi, vyi])
-        
-        # Check if speeds are significant enough to have a clear direction
-        speed_i = math.hypot(vxi, vyi)
-        
-        # Project the relative position vector onto vehicle i's velocity vector.
-        # A positive dot product means j is generally "in front" of i.
-        if speed_i > 0.1 and np.dot(vec_ij, vel_i) > 0:
-            # j is in front of i, so i is the follower
-            follower_id = tracker_i
-            leader_id = tracker_j
-        else:
-            # Otherwise, j is behind or beside i (or i is stopped), so treat i as the leader.
-            follower_id = tracker_j
-            leader_id = tracker_i
 
         # All filters passed - create validated TTC event
         rel_speed = math.hypot(vx, vy)
@@ -250,8 +230,8 @@ class EnhancedTTCProcessor:
 
         return TTCEvent(
             frame_idx=frame_idx,
-            follower_id=follower_id, # Use new meaningful assignment
-            leader_id=leader_id,     # Use new meaningful assignment
+            follower_id=tracker_i,
+            leader_id=tracker_j,
             ttc_seconds=t_star,
             closest_distance=d_closest,
             relative_speed=rel_speed,
@@ -261,7 +241,75 @@ class EnhancedTTCProcessor:
             kalman_eligible=True  # Always true if we reach this point
         )
 
+    def _apply_path_separation_filter(self, tracker_i: int, tracker_j: int,
+                                    xi: float, yi: float, vxi: float, vyi: float,
+                                    xj: float, yj: float, vxj: float, vyj: float,
+                                    t_star: float) -> bool:
+        """FILTER 5: Path Separation Analysis with lateral clearance buffer.
         
+        This replaces the binary AABB overlap filter with a more robust analysis
+        of lateral separation between vehicle paths at the time of closest approach.
+        """
+        # Get vehicle classes and dimensions
+        class_i = self.id_to_class.get(tracker_i, 'car')
+        class_j = self.id_to_class.get(tracker_j, 'car')
+
+        default_dims = {'length': 4.0, 'width': 1.8}
+        dims_i = self.vehicle_dimensions.get(class_i,
+                                           self.vehicle_dimensions.get('default', default_dims))
+        dims_j = self.vehicle_dimensions.get(class_j,
+                                           self.vehicle_dimensions.get('default', default_dims))
+
+        # Calculate positions at t_star (closest approach time)
+        xi_future = xi + vxi * t_star
+        yi_future = yi + vyi * t_star
+        xj_future = xj + vxj * t_star
+        yj_future = yj + vyj * t_star
+
+        # Calculate relative velocity vector
+        vx_rel = vxj - vxi
+        vy_rel = vyj - vyi
+        rel_speed = math.hypot(vx_rel, vy_rel)
+
+        # Handle stationary followers (both vehicles have similar velocities)
+        if rel_speed < 0.1:  # Nearly stationary relative motion
+            # Use direct distance between vehicle centers
+            separation_vector_x = xj_future - xi_future
+            separation_vector_y = yj_future - yi_future
+            lateral_separation = math.hypot(separation_vector_x, separation_vector_y)
+        else:
+            # Calculate lateral separation by projecting separation onto perpendicular to relative velocity
+            # Normalize relative velocity vector
+            vx_rel_norm = vx_rel / rel_speed
+            vy_rel_norm = vy_rel / rel_speed
+            
+            # Perpendicular vector to relative velocity (rotated 90 degrees)
+            perp_x = -vy_rel_norm
+            perp_y = vx_rel_norm
+            
+            # Separation vector between vehicle positions at t_star
+            separation_vector_x = xj_future - xi_future
+            separation_vector_y = yj_future - yi_future
+            
+            # Project separation vector onto perpendicular direction to get lateral separation
+            lateral_separation = abs(separation_vector_x * perp_x + separation_vector_y * perp_y)
+
+        # Calculate required clearance: sum of half-widths plus buffer
+        half_width_i = dims_i['width'] / 2.0
+        half_width_j = dims_j['width'] / 2.0
+        required_clearance = half_width_i + half_width_j + self.ttc_lateral_separation_buffer
+
+        # Debug output if enabled
+        if self.debug_mode:
+            print(f"[PATH SEPARATION] Trackers {tracker_i}-{tracker_j}: "
+                  f"lateral_sep={lateral_separation:.2f}m, "
+                  f"required={required_clearance:.2f}m, "
+                  f"widths=({dims_i['width']:.1f}, {dims_j['width']:.1f}), "
+                  f"buffer={self.ttc_lateral_separation_buffer:.1f}m, "
+                  f"rel_speed={rel_speed:.2f}m/s")
+
+        # Return True if there is insufficient lateral clearance (potential collision)
+        return lateral_separation < required_clearance
 
     # [Include all the existing filter methods from the previous implementation]
     def _apply_hysteresis_filter(self, pair_key: Tuple[int, int],
@@ -327,44 +375,6 @@ class EnhancedTTCProcessor:
             return angle_deg
         else:
             return None
-
-    def _apply_vehicle_dimension_filter(self, tracker_i: int, tracker_j: int,
-                                      xi: float, yi: float, vxi: float, vyi: float,
-                                      xj: float, yj: float, vxj: float, vyj: float,
-                                      t_star: float) -> bool:
-        """FILTER 5: Vehicle Dimension Collision (AABB Overlap)"""
-        class_i = self.id_to_class.get(tracker_i, 'car')
-        class_j = self.id_to_class.get(tracker_j, 'car')
-
-        default_dims = {'length': 4.0, 'width': 1.8}
-        dims_i = self.vehicle_dimensions.get(class_i,
-                                           self.vehicle_dimensions.get('default', default_dims))
-        dims_j = self.vehicle_dimensions.get(class_j,
-                                           self.vehicle_dimensions.get('default', default_dims))
-
-        center_i_future = (xi + vxi * t_star, yi + vyi * t_star)
-        center_j_future = (xj + vxj * t_star, yj + vyj * t_star)
-
-        box_i = self._construct_aabb(center_i_future, dims_i)
-        box_j = self._construct_aabb(center_j_future, dims_j)
-
-        return self._aabb_overlap(box_i, box_j)
-
-    def _construct_aabb(self, center: Tuple[float, float],
-                       dimensions: Dict[str, float]) -> Tuple[float, float, float, float]:
-        """Construct axis-aligned bounding box."""
-        cx, cy = center
-        half_width = dimensions['width'] / 2.0
-        half_length = dimensions['length'] / 2.0
-        return (cx - half_width, cx + half_width, cy - half_length, cy + half_length)
-
-    def _aabb_overlap(self, box1: Tuple[float, float, float, float],
-                     box2: Tuple[float, float, float, float]) -> bool:
-        """Check if two axis-aligned bounding boxes overlap."""
-        x1_min, x1_max, y1_min, y1_max = box1
-        x2_min, x2_max, y2_min, y2_max = box2
-        return not (x1_max < x2_min or x1_min > x2_max or
-                   y1_max < y2_min or y1_min > y2_max)
 
     def _get_detection_confidences(self, detections, tracker_i: int,
                                  tracker_j: int) -> Tuple[float, float]:
@@ -478,6 +488,7 @@ class EventProcessor:
             'MIN_CONFIDENCE_FOR_TTC': 0.4,
             'TTC_MIN_RELATIVE_ANGLE': 10,
             'TTC_MAX_RELATIVE_ANGLE': 150,
+            'TTC_LATERAL_SEPARATION_BUFFER': 0.3,  # NEW: Default lateral separation buffer
             'TTC_CLEANUP_TIMEOUT_FRAMES': 90,
             'ENABLE_TTC_DEBUG': False,
             'VEHICLE_DIMENSIONS': {

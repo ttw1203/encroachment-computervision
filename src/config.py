@@ -109,23 +109,26 @@ class Config:
         self.TTC_MIN_RELATIVE_ANGLE = float(os.getenv("TTC_MIN_RELATIVE_ANGLE", "10"))   # degrees
         self.TTC_MAX_RELATIVE_ANGLE = float(os.getenv("TTC_MAX_RELATIVE_ANGLE", "150"))  # degrees
 
+        # NEW: Path separation buffer for lateral clearance analysis
+        self.TTC_LATERAL_SEPARATION_BUFFER = float(os.getenv("TTC_LATERAL_SEPARATION_BUFFER", "0.3"))  # meters
+
         # Cleanup and memory management
         self.TTC_CLEANUP_TIMEOUT_FRAMES = int(os.getenv("TTC_CLEANUP_TIMEOUT_FRAMES", "90"))
 
         # Debug mode for TTC processing
         self.ENABLE_TTC_DEBUG = os.getenv("ENABLE_TTC_DEBUG", "False").lower() == "true"
 
-        # Vehicle dimensions for AABB collision detection
+        # Vehicle dimensions for collision detection
         self.VEHICLE_DIMENSIONS = self._load_vehicle_dimensions()
 
         # Default parameters (unchanged)
         self.CLIP_SECONDS = 0
         self.DISPLAY = False
-        self.ENCROACH_SECS = 5
-        self.MOVE_THRESH_METRES = 2
+        self.ENCROACH_SECS = 30
+        self.MOVE_THRESH_METRES = 1
         self.DEFAULT_NUM_FUTURE_PREDICTIONS = 10
         self.DEFAULT_FUTURE_PREDICTION_INTERVAL = 0.1
-        self.DEFAULT_TTC_THRESHOLD = 5.0
+        self.DEFAULT_TTC_THRESHOLD = 1.0
         self.MAX_AGE_SECONDS = 1.5
         self.COLLISION_DISTANCE = 2.0
 
@@ -176,6 +179,10 @@ class Config:
 
         if self.COLLISION_DISTANCE_ON >= self.COLLISION_DISTANCE_OFF:
             errors.append("COLLISION_DISTANCE_ON must be less than COLLISION_DISTANCE_OFF")
+
+        # Validate NEW path separation buffer parameter
+        if not (0.0 <= self.TTC_LATERAL_SEPARATION_BUFFER <= 5.0):
+            errors.append("TTC_LATERAL_SEPARATION_BUFFER should be between 0.0 and 5.0 meters")
 
         # Validate piecewise calibration parameters
         if self.SPEED_CALIBRATION_MODEL_TYPE.lower() == "piecewise":
@@ -261,6 +268,7 @@ class Config:
             'MIN_CONFIDENCE_FOR_TTC': self.MIN_CONFIDENCE_FOR_TTC,
             'TTC_MIN_RELATIVE_ANGLE': self.TTC_MIN_RELATIVE_ANGLE,
             'TTC_MAX_RELATIVE_ANGLE': self.TTC_MAX_RELATIVE_ANGLE,
+            'TTC_LATERAL_SEPARATION_BUFFER': self.TTC_LATERAL_SEPARATION_BUFFER,  # NEW
             'TTC_CLEANUP_TIMEOUT_FRAMES': self.TTC_CLEANUP_TIMEOUT_FRAMES,
             'ENABLE_TTC_DEBUG': self.ENABLE_TTC_DEBUG,
             'VEHICLE_DIMENSIONS': self.VEHICLE_DIMENSIONS,
@@ -297,6 +305,10 @@ class Config:
         if self.TTC_MIN_RELATIVE_ANGLE >= self.TTC_MAX_RELATIVE_ANGLE:
             errors.append("TTC_MIN_RELATIVE_ANGLE must be less than TTC_MAX_RELATIVE_ANGLE")
 
+        # Validate NEW lateral separation buffer
+        if not (0.0 <= self.TTC_LATERAL_SEPARATION_BUFFER <= 5.0):
+            errors.append("TTC_LATERAL_SEPARATION_BUFFER should be between 0.0 and 5.0 meters")
+
         if errors:
             print("TTC Configuration Errors:")
             for error in errors:
@@ -315,6 +327,7 @@ class Config:
         print(f"  Persistence: {self.TTC_PERSISTENCE_FRAMES} frames")
         print(f"  Min Confidence: {self.MIN_CONFIDENCE_FOR_TTC:.2f}")
         print(f"  Angle Range: {self.TTC_MIN_RELATIVE_ANGLE:.0f}° - {self.TTC_MAX_RELATIVE_ANGLE:.0f}°")
+        print(f"  Lateral Separation Buffer: {self.TTC_LATERAL_SEPARATION_BUFFER:.1f}m")  # NEW
         print(f"Debug Mode: {'Enabled' if self.ENABLE_TTC_DEBUG else 'Disabled'}")
         print(f"Vehicle Classes: {len(self.VEHICLE_DIMENSIONS)} defined")
         print("=" * 35)
