@@ -121,8 +121,8 @@ class Config:
         # Default parameters (unchanged)
         self.CLIP_SECONDS = 0
         self.DISPLAY = False
-        self.ENCROACH_SECS = 30
-        self.MOVE_THRESH_METRES = 1
+        self.ENCROACH_SECS = 5
+        self.MOVE_THRESH_METRES = 2
         self.DEFAULT_NUM_FUTURE_PREDICTIONS = 10
         self.DEFAULT_FUTURE_PREDICTION_INTERVAL = 0.1
         self.DEFAULT_TTC_THRESHOLD = 1.0
