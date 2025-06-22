@@ -45,7 +45,12 @@ With a stable, real-world understanding of each vehicle's motion, the system per
     5.  **AABB Collision Filter:** Using a database of real-world vehicle dimensions, the system projects the axis-aligned bounding boxes (AABBs) of both vehicles forward in time to the point of closest approach. An event is only triggered if these boxes would actually overlap.
 
 #### 📊 Traffic Flow and Speed Analysis
-* **Methodology:** The system uses a virtual "analysis segment" defined in the BEV to calculate high-level traffic metrics. This segment is defined by an `entry_line`, an `exit_line`, and a `flow_line` at its midpoint.
+* **Methodology:** The system uses a virtual "analysis segment" defined in the BEV to calculate high-level traffic metrics. This segment is intelligently positioned using a configurable buffer zone to ensure accurate measurements.
+    * **Buffer Zone Configuration:** A configurable `BUFFER_LENGTH` parameter (in meters) creates a buffer from the edge of the ROI closest to the camera. This ensures the analysis segment is positioned away from the ROI boundaries where perspective distortion might affect measurements.
+    * **Analysis Segment Layout:** The segment consists of three lines:
+        - **Exit Line:** Positioned at `ROI_height - BUFFER_LENGTH` meters from the top of the ROI
+        - **Entry Line:** Positioned at `exit_line_position - SMS_SEGMENT_LENGTH` meters
+        - **Flow Line:** Positioned at the midpoint between entry and exit lines
     * **Vehicle Counting & Flow:** As vehicles cross the `flow_line`, they are counted. At the end of a configurable time interval (e.g., 5 minutes), the system reports the total vehicle count (flow) for that period.
     * **Space Mean Speed (SMS):** The system records the exact frame a vehicle crosses the `entry_line` and the `exit_line`. By averaging the travel time for all vehicles to cross the known length of the segment, it calculates the SMS—a key metric representing the average speed of traffic over a stretch of road.
     * **Time Mean Speed (TMS):** The instantaneous speed of every vehicle is logged in `vehicle_metrics.csv`. This data can be used to calculate the TMS, which is the average speed of all vehicles passing a single point over a period of time.
