@@ -44,10 +44,11 @@ class IOManager:
         print(f"[IOManager] Results will be saved to: {self.output_dir.absolute()}")
 
     def save_vehicle_metrics(self, csv_rows: List[List]) -> Path:
-        """Save vehicle metrics to CSV."""
+        """Save vehicle metrics to CSV with Kalman filter state vectors."""
         df = pd.DataFrame(
             csv_rows,
-            columns=["frame", "vehicle_id", "vehicle_class", "confidence", "speed_km_h"]
+            columns=["frame", "vehicle_id", "vehicle_class", "confidence",
+                      "x", "y", "vx", "vy", "speed_km_h"]
         )
         csv_file = self.output_dir / f"vehicle_metrics_{self.timestamp}.csv"
         df.to_csv(csv_file, index=False)
