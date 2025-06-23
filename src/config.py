@@ -122,13 +122,13 @@ class Config:
         self.VEHICLE_DIMENSIONS = self._load_vehicle_dimensions()
 
         # Default parameters (unchanged)
-        self.CLIP_SECONDS = 0
+        self.CLIP_SECONDS = int(os.getenv("CLIP_SECONDS", "0"))
         self.DISPLAY = False
-        self.ENCROACH_SECS = 30
-        self.MOVE_THRESH_METRES = 1
+        self.ENCROACH_SECS = int(os.getenv("ENCROACH_SECS", "5"))
+        self.MOVE_THRESH_METRES = float(os.getenv("MOVE_THRESH_METRES", "2.0"))  # meters
         self.DEFAULT_NUM_FUTURE_PREDICTIONS = 10
         self.DEFAULT_FUTURE_PREDICTION_INTERVAL = 0.1
-        self.DEFAULT_TTC_THRESHOLD = 1.0
+        self.DEFAULT_TTC_THRESHOLD = float(os.getenv("DEFAULT_TTC_THRESHOLD", "5.0"))  # seconds
         self.MAX_AGE_SECONDS = 1.5
         self.COLLISION_DISTANCE = 2.0
 
