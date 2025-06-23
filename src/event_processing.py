@@ -78,6 +78,34 @@ class EnhancedTTCProcessor:
         # Debug mode
         self.debug_mode = config.get('ENABLE_TTC_DEBUG', False)
 
+    def _determine_follower_and_leader(self, state_i, state_j, tracker_i, tracker_j) -> Optional[Tuple]:
+        """
+        Determines which vehicle is the follower based on their relative positions and velocities.
+        The primary direction of traffic is assumed to be along the Y-axis in the bird's-eye view.
+
+        Returns:
+            A tuple of (follower_state, leader_state, follower_id, leader_id) if a valid
+            follower-leader relationship exists, otherwise None.
+        """
+        xi, yi, vxi, vyi = state_i
+        xj, yj, vxj, vyj = state_j
+
+        # The vehicle with the smaller Y-coordinate is considered the follower
+        # as it is "behind" in the primary direction of traffic flow.
+        if yi < yj:
+            follower_state, leader_state = state_i, state_j
+            follower_id, leader_id = tracker_i, tracker_j
+        else:
+            follower_state, leader_state = state_j, state_i
+            follower_id, leader_id = tracker_j, tracker_i
+
+        # The follower's velocity in the Y direction must be positive (moving towards the leader)
+        # and greater than the leader's velocity to indicate they are catching up.
+        if follower_state[3] > leader_state[3]:
+            return follower_state, leader_state, follower_id, leader_id
+
+        return None
+    
     def process_ttc_events(self, detections, kf_states: Dict, frame_idx: int,
                            detector_tracker, polygon_zone=None) -> List[TTCEvent]:
         """Main TTC processing pipeline with ROI-based filtering to prevent ghost TTCs."""
@@ -165,80 +193,79 @@ class EnhancedTTCProcessor:
         return current_events
 
     def _apply_ttc_filters(self, pair_key: Tuple[int, int], kf_states: Dict,
-                          frame_idx: int, conf_i: float, conf_j: float) -> Optional[TTCEvent]:
-        """Apply the 5-stage TTC filtering pipeline (Kalman check already passed)."""
+                           frame_idx: int, conf_i: float, conf_j: float) -> Optional[TTCEvent]:
+        """Apply the REVISED 5-stage TTC filtering pipeline."""
         tracker_i, tracker_j = pair_key
 
         # Get Kalman states
         if tracker_i not in kf_states or tracker_j not in kf_states:
             return None
 
-        kf_i = kf_states[tracker_i]
-        kf_j = kf_states[tracker_j]
+        state_i = kf_states[tracker_i].statePost.flatten()
+        state_j = kf_states[tracker_j].statePost.flatten()
 
-        # Extract state vectors (x, y, vx, vy) in real-world coordinates
-        state_i = kf_i.statePost.flatten()
-        state_j = kf_j.statePost.flatten()
+        # STAGE 1: Determine Follower-Leader Relationship
+        follower_leader_tuple = self._determine_follower_and_leader(state_i, state_j, tracker_i, tracker_j)
+        if not follower_leader_tuple:
+            return None
+        follower_state, leader_state, follower_id, leader_id = follower_leader_tuple
 
-        xi, yi, vxi, vyi = state_i
-        xj, yj, vxj, vyj = state_j
+        # STAGE 2: Collision Cone Filter
+        if not self._apply_collision_cone_filter(follower_state, leader_state):
+            return None
 
         # Calculate basic TTC parameters
-        rx0, ry0 = xj - xi, yj - yi
-        vx, vy = vxj - vxi, vyj - vyi
+        xf, yf, vxf, vyf = follower_state
+        xl, yl, vxl, vyl = leader_state
+        rx0, ry0 = xl - xf, yl - yf
+        vx, vy = vxl - vxf, vyl - vyf
 
         denom = vx * vx + vy * vy
-        if denom == 0:
+        if denom < 0.01: # Avoid division by zero for parallel-moving vehicles
             return None
 
         t_star = -(rx0 * vx + ry0 * vy) / denom
 
-        if t_star <= 0:
+        if t_star <= 0: # Closest approach is in the past
             return None
 
-        # Calculate closest approach distance
         dx = rx0 + vx * t_star
         dy = ry0 + vy * t_star
         d_closest = math.hypot(dx, dy)
 
-        # FILTER 1: Hysteresis Logic
+        # STAGE 3: Hysteresis Logic (Unchanged)
         if not self._apply_hysteresis_filter(pair_key, t_star, d_closest):
             return None
 
-        # FILTER 2: Persistence Threshold
+        # STAGE 4: Persistence Threshold (Unchanged)
         if not self._apply_persistence_filter(pair_key, frame_idx):
             return None
 
-        # FILTER 3: Confidence-Based Filtering
+        # STAGE 5: Confidence-Based Filtering (Unchanged)
         if not self._apply_confidence_filter(conf_i, conf_j):
             return None
 
-        # FILTER 4: Relative Angle Filtering
-        rel_angle = self._apply_relative_angle_filter(vxi, vyi, vxj, vyj, d_closest)
-        if rel_angle is None:
-            return None
-
-        # FILTER 5: Path Separation Analysis (REPLACES Vehicle Dimension Collision)
-        if not self._apply_path_separation_filter(
-            tracker_i, tracker_j, xi, yi, vxi, vyi, xj, yj, vxj, vyj, t_star):
-            return None
+        # STAGE 6 (Bonus): Future AABB Collision Filter
+        if not self._apply_aabb_collision_filter(follower_id, leader_id, follower_state, leader_state, t_star):
+             return None
 
         # All filters passed - create validated TTC event
         rel_speed = math.hypot(vx, vy)
         confidence_score = (conf_i + conf_j) / 2.0
         event_id = f"{frame_idx}_{min(tracker_i, tracker_j)}_{max(tracker_i, tracker_j)}"
 
+        # We return a dummy angle of 0.0 since the cone filter is more descriptive
         return TTCEvent(
             frame_idx=frame_idx,
-            follower_id=tracker_i,
-            leader_id=tracker_j,
+            follower_id=follower_id,
+            leader_id=leader_id,
             ttc_seconds=t_star,
             closest_distance=d_closest,
             relative_speed=rel_speed,
             confidence_score=confidence_score,
-            relative_angle=rel_angle,
+            relative_angle=0.0,
             event_id=event_id,
-            kalman_eligible=True  # Always true if we reach this point
+            kalman_eligible=True
         )
 
     def _apply_path_separation_filter(self, tracker_i: int, tracker_j: int,
