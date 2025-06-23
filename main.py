@@ -984,13 +984,23 @@ def main():
 
                         # Only save metrics if speed is meaningful
                         if speed_ms >= args.min_speed_threshold:
-                            csv_rows.append([
-                                frame_idx,
-                                int(tracker_id),
-                                class_name,
-                                confidence,
-                                round(speed_ms * 3.6, 2)  # Convert to km/h
-                            ])
+                            # Get Kalman filter state vector
+                            if tracker_id in kf_manager.get_all_states():
+                                kf = kf_manager.get_all_states()[tracker_id]
+                                state = kf.statePost.flatten()
+                                x, y, vx, vy = state
+                                
+                                csv_rows.append([
+                                    frame_idx,
+                                    int(tracker_id),
+                                    class_name,
+                                    confidence,
+                                    round(x, 2),      # BEV x position in meters
+                                    round(y, 2),      # BEV y position in meters
+                                    round(vx, 2),     # BEV x velocity in m/s
+                                    round(vy, 2),     # BEV y velocity in m/s
+                                    round(speed_ms * 3.6, 2)  # Convert to km/h
+                                ])
 
                         # Create speed label
                         if speed_ms < args.min_speed_threshold:
