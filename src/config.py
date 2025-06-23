@@ -108,7 +108,7 @@ class Config:
         # Relative angle filtering - approach angle constraints
         self.TTC_MIN_RELATIVE_ANGLE = float(os.getenv("TTC_MIN_RELATIVE_ANGLE", "10"))   # degrees
         self.TTC_MAX_RELATIVE_ANGLE = float(os.getenv("TTC_MAX_RELATIVE_ANGLE", "150"))  # degrees
-
+        self.TTC_COLLISION_CONE_ANGLE = float(os.getenv("TTC_COLLISION_CONE_ANGLE", "30"))  # NEW: Angle for cone filter
         # NEW: Path separation buffer for lateral clearance analysis
         self.TTC_LATERAL_SEPARATION_BUFFER = float(os.getenv("TTC_LATERAL_SEPARATION_BUFFER", "0.3"))  # meters
 
