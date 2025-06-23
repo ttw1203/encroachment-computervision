@@ -265,78 +265,7 @@ class EnhancedTTCProcessor:
             confidence_score=confidence_score,
             relative_angle=0.0,
             event_id=event_id,
-            kalman_eligible=True
-        )
-
-    def _apply_path_separation_filter(self, tracker_i: int, tracker_j: int,
-                                    xi: float, yi: float, vxi: float, vyi: float,
-                                    xj: float, yj: float, vxj: float, vyj: float,
-                                    t_star: float) -> bool:
-        """FILTER 5: Path Separation Analysis with lateral clearance buffer.
-        
-        This replaces the binary AABB overlap filter with a more robust analysis
-        of lateral separation between vehicle paths at the time of closest approach.
-        """
-        # Get vehicle classes and dimensions
-        class_i = self.id_to_class.get(tracker_i, 'car')
-        class_j = self.id_to_class.get(tracker_j, 'car')
-
-        default_dims = {'length': 4.0, 'width': 1.8}
-        dims_i = self.vehicle_dimensions.get(class_i,
-                                           self.vehicle_dimensions.get('default', default_dims))
-        dims_j = self.vehicle_dimensions.get(class_j,
-                                           self.vehicle_dimensions.get('default', default_dims))
-
-        # Calculate positions at t_star (closest approach time)
-        xi_future = xi + vxi * t_star
-        yi_future = yi + vyi * t_star
-        xj_future = xj + vxj * t_star
-        yj_future = yj + vyj * t_star
-
-        # Calculate relative velocity vector
-        vx_rel = vxj - vxi
-        vy_rel = vyj - vyi
-        rel_speed = math.hypot(vx_rel, vy_rel)
-
-        # Handle stationary followers (both vehicles have similar velocities)
-        if rel_speed < 0.1:  # Nearly stationary relative motion
-            # Use direct distance between vehicle centers
-            separation_vector_x = xj_future - xi_future
-            separation_vector_y = yj_future - yi_future
-            lateral_separation = math.hypot(separation_vector_x, separation_vector_y)
-        else:
-            # Calculate lateral separation by projecting separation onto perpendicular to relative velocity
-            # Normalize relative velocity vector
-            vx_rel_norm = vx_rel / rel_speed
-            vy_rel_norm = vy_rel / rel_speed
-            
-            # Perpendicular vector to relative velocity (rotated 90 degrees)
-            perp_x = -vy_rel_norm
-            perp_y = vx_rel_norm
-            
-            # Separation vector between vehicle positions at t_star
-            separation_vector_x = xj_future - xi_future
-            separation_vector_y = yj_future - yi_future
-            
-            # Project separation vector onto perpendicular direction to get lateral separation
-            lateral_separation = abs(separation_vector_x * perp_x + separation_vector_y * perp_y)
-
-        # Calculate required clearance: sum of half-widths plus buffer
-        half_width_i = dims_i['width'] / 2.0
-        half_width_j = dims_j['width'] / 2.0
-        required_clearance = half_width_i + half_width_j + self.ttc_lateral_separation_buffer
-
-        # Debug output if enabled
-        if self.debug_mode:
-            print(f"[PATH SEPARATION] Trackers {tracker_i}-{tracker_j}: "
-                  f"lateral_sep={lateral_separation:.2f}m, "
-                  f"required={required_clearance:.2f}m, "
-                  f"widths=({dims_i['width']:.1f}, {dims_j['width']:.1f}), "
-                  f"buffer={self.ttc_lateral_separation_buffer:.1f}m, "
-                  f"rel_speed={rel_speed:.2f}m/s")
-
-        # Return True if there is insufficient lateral clearance (potential collision)
-        return lateral_separation < required_clearance
+            kalman_eligible=True        )
 
     # [Include all the existing filter methods from the previous implementation]
     def _apply_hysteresis_filter(self, pair_key: Tuple[int, int],
@@ -376,32 +305,6 @@ class EnhancedTTCProcessor:
         """FILTER 3: Confidence-Based Filtering"""
         return (conf_i >= self.min_confidence_for_ttc and
                 conf_j >= self.min_confidence_for_ttc)
-
-    def _apply_relative_angle_filter(self, vxi: float, vyi: float,
-                                   vxj: float, vyj: float, d_closest: float) -> Optional[float]:
-        """FILTER 4: Relative Angle Filtering"""
-        if d_closest < 0.5:
-            return 0.0
-
-        speed_i = math.hypot(vxi, vyi)
-        speed_j = math.hypot(vxj, vyj)
-
-        if speed_i < 0.1 or speed_j < 0.1:
-            return None
-
-        vxi_norm, vyi_norm = vxi / speed_i, vyi / speed_i
-        vxj_norm, vyj_norm = vxj / speed_j, vyj / speed_j
-
-        dot_product = vxi_norm * vxj_norm + vyi_norm * vyj_norm
-        dot_product = np.clip(dot_product, -1.0, 1.0)
-        angle_rad = math.acos(dot_product)
-        angle_deg = math.degrees(angle_rad)
-
-        if (angle_deg >= self.ttc_min_relative_angle and
-            angle_deg <= self.ttc_max_relative_angle):
-            return angle_deg
-        else:
-            return None
 
     def _get_detection_confidences(self, detections, tracker_i: int,
                                  tracker_j: int) -> Tuple[float, float]:
