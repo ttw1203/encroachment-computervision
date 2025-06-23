@@ -105,6 +105,71 @@ class EnhancedTTCProcessor:
             return follower_state, leader_state, follower_id, leader_id
 
         return None
+
+    def _apply_collision_cone_filter(self, follower_state: np.ndarray, leader_state: np.ndarray) -> bool:
+        """
+        FILTER 4 (NEW): Checks if the leader is within a forward-facing cone of the follower.
+        """
+        xf, yf, vxf, vyf = follower_state
+        xl, yl, _, _ = leader_state
+
+        # Follower's velocity vector magnitude
+        follower_velocity_magnitude = math.hypot(vxf, vyf)
+        if follower_velocity_magnitude < 0.5:  # Follower is nearly stationary
+            return False
+
+        # Vector from follower to leader
+        pos_rel_x, pos_rel_y = xl - xf, yl - yf
+        pos_rel_magnitude = math.hypot(pos_rel_x, pos_rel_y)
+        if pos_rel_magnitude < 1.0: # Vehicles are already too close
+            return True
+
+        # Calculate the angle between the follower's velocity and the vector to the leader
+        dot_product = (vxf * pos_rel_x) + (vyf * pos_rel_y)
+        cos_angle = dot_product / (follower_velocity_magnitude * pos_rel_magnitude)
+        angle_rad = math.acos(np.clip(cos_angle, -1.0, 1.0))
+        angle_deg = math.degrees(angle_rad)
+
+        # Check if the angle is within our defined cone
+        return angle_deg < (self.config.get('TTC_COLLISION_CONE_ANGLE', 30) / 2.0)
+
+    def _apply_aabb_collision_filter(self, follower_id: int, leader_id: int,
+                                     follower_state: np.ndarray, leader_state: np.ndarray,
+                                     t_star: float) -> bool:
+        """
+        FILTER 5 (NEW): Projects Axis-Aligned Bounding Boxes (AABB) to the time of
+        closest approach (t_star) and checks for physical overlap.
+        """
+        # Get vehicle dimensions
+        default_dims = {'length': 4.0, 'width': 1.8}
+        follower_class = self.id_to_class.get(follower_id, 'default')
+        leader_class = self.id_to_class.get(leader_id, 'default')
+        dims_f = self.vehicle_dimensions.get(follower_class, default_dims)
+        dims_l = self.vehicle_dimensions.get(leader_class, default_dims)
+
+        # Calculate future positions at t_star
+        xf, yf, vxf, vyf = follower_state
+        xl, yl, vxl, vyl = leader_state
+        xf_future, yf_future = xf + vxf * t_star, yf + vyf * t_star
+        xl_future, yl_future = xl + vxl * t_star, yl + vyl * t_star
+
+        # Create future Axis-Aligned Bounding Boxes
+        f_box = [xf_future - dims_f['width']/2, yf_future - dims_f['length']/2,
+                 xf_future + dims_f['width']/2, yf_future + dims_f['length']/2]
+
+        l_box = [xl_future - dims_l['width']/2, yl_future - dims_l['length']/2,
+                 xl_future + dims_l['width']/2, yl_future + dims_l['length']/2]
+
+        # Check for overlap (intersection)
+        # No overlap if one box is to the left of the other
+        if f_box[2] < l_box[0] or l_box[2] < f_box[0]:
+            return False
+        # No overlap if one box is above the other
+        if f_box[3] < l_box[1] or l_box[3] < f_box[1]:
+            return False
+
+        # Otherwise, the boxes overlap
+        return True
     
     def process_ttc_events(self, detections, kf_states: Dict, frame_idx: int,
                            detector_tracker, polygon_zone=None) -> List[TTCEvent]:
@@ -265,7 +330,8 @@ class EnhancedTTCProcessor:
             confidence_score=confidence_score,
             relative_angle=0.0,
             event_id=event_id,
-            kalman_eligible=True        )
+            kalman_eligible=True
+        )
 
     # [Include all the existing filter methods from the previous implementation]
     def _apply_hysteresis_filter(self, pair_key: Tuple[int, int],
