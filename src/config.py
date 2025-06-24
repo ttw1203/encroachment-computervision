@@ -128,7 +128,7 @@ class Config:
         self.MOVE_THRESH_METRES = float(os.getenv("MOVE_THRESH_METRES", "2.0"))  # meters
         self.DEFAULT_NUM_FUTURE_PREDICTIONS = 10
         self.DEFAULT_FUTURE_PREDICTION_INTERVAL = 0.1
-        self.DEFAULT_TTC_THRESHOLD = float(os.getenv("DEFAULT_TTC_THRESHOLD", "5.0"))  # seconds
+        self.DEFAULT_TTC_THRESHOLD = float(os.getenv("DEFAULT_TTC_THRESHOLD", "30.0"))  # seconds
         self.MAX_AGE_SECONDS = 1.5
         self.COLLISION_DISTANCE = 2.0
 
