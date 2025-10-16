@@ -175,3 +175,4 @@ cython_debug/
 .pypirc
 
 open_model_zoo/
+.vscode/settings.json

@@ -122,7 +122,7 @@ class Config:
         self.VEHICLE_DIMENSIONS = self._load_vehicle_dimensions()
 
         # Default parameters (unchanged)
-        self.CLIP_SECONDS = int(os.getenv("CLIP_SECONDS", "0"))
+        self.CLIP_SECONDS = int(os.getenv("CLIP_SECONDS", "20"))
         self.DISPLAY = False
         self.ENCROACH_SECS = int(os.getenv("ENCROACH_SECS", "5"))
         self.MOVE_THRESH_METRES = float(os.getenv("MOVE_THRESH_METRES", "2.0"))  # meters

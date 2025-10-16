@@ -62,8 +62,8 @@ class DetectionTracker:
                 from rfdetr import RFDETRLarge
                 ModelClass = RFDETRLarge
             else:
-                from rfdetr import RFDETRBase
-                ModelClass = RFDETRBase
+                from rfdetr import RFDETRMedium
+                ModelClass = RFDETRMedium
 
             # Initialize model with custom checkpoint if provided
             if rf_detr_config.get('model_path'):
